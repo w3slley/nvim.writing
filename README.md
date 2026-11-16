@@ -4,6 +4,8 @@ A suggestion-first writing plugin for Neovim. A small box under the text you are
 
 Works in Markdown and plain text, in English and European Portuguese (PT-PT). The reply language follows the sentence.
 
+![Demo: sentence variations, spelling fixes, synonyms and fragment replacements](docs/demo.gif)
+
 ## Install
 
 Needs Neovim 0.10+ (tested on 0.12), plus `curl`, `unzip` and `gzip` for the one-time dictionary downloads. Suggestions need an LLM provider: the Claude CLI by default, or any OpenAI-compatible server such as Ollama (see LLM configuration).
@@ -314,6 +316,8 @@ make clean    remove the scratch copy
 ```
 
 `make run` uses an isolated profile (`NVIM_APPNAME=writing-dev`) and the repo's `init.lua`, which points at a local Ollama `gemma3:4b`. Edit it to try another provider.
+
+The demo GIF is rendered with [VHS](https://github.com/charmbracelet/vhs) against a local Ollama: `mkdir -p .scratch && : > .scratch/demo.md && vhs scripts/demo.tape`.
 
 The benchmark reads `BENCH_TARGETS` as `name|url|model|KEY_ENV`, separated by `;`, and skips targets whose key is unset (optional for local servers):
 
