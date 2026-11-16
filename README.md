@@ -6,6 +6,8 @@ Works in Markdown and plain text, in English and European Portuguese (PT-PT). Th
 
 ![Demo: sentence variations, spelling fixes, synonyms and fragment replacements](docs/demo.gif)
 
+![Demo: finding a word from a description, then looking up its meaning](docs/demo-words.gif)
+
 ## Install
 
 Needs Neovim 0.10+ (tested on 0.12), plus `curl`, `unzip` and `gzip` for the one-time dictionary downloads. Suggestions need an LLM provider: the Claude CLI by default, or any OpenAI-compatible server such as Ollama (see LLM configuration).
@@ -317,7 +319,7 @@ make clean    remove the scratch copy
 
 `make run` uses an isolated profile (`NVIM_APPNAME=writing-dev`) and the repo's `init.lua`, which points at a local Ollama `gemma3:4b`. Edit it to try another provider.
 
-The demo GIF is rendered with [VHS](https://github.com/charmbracelet/vhs) against a local Ollama: `mkdir -p .scratch && : > .scratch/demo.md && vhs scripts/demo.tape`.
+The demo GIFs are rendered with [VHS](https://github.com/charmbracelet/vhs) against a local Ollama, with the dictionaries installed in the dev profile: `mkdir -p .scratch && : > .scratch/demo.md && : > .scratch/demo-words.md && vhs scripts/demo.tape && vhs scripts/demo-words.tape`.
 
 The benchmark reads `BENCH_TARGETS` as `name|url|model|KEY_ENV`, separated by `;`, and skips targets whose key is unset (optional for local servers):
 
