@@ -1,0 +1,200 @@
+local M = {}
+
+local ns = vim.api.nvim_create_namespace("writing_box")
+local ghost_ns = vim.api.nvim_create_namespace("writing_ghost")
+
+local TITLES = { synonyms = "Synonyms", variations = "Variations", make_sense = "Make sense" }
+local KEY_LABELS = { ["<CR>"] = "⏎", ["<Esc>"] = "esc" }
+
+local state = { win = nil, buf = nil, target_buf = nil }
+
+function M.setup_highlights()
+  local function hl(name, link) vim.api.nvim_set_hl(0, name, { link = link, default = true }) end
+  hl("WritingBox", "NormalFloat")
+  hl("WritingBoxBorder", "FloatBorder")
+  hl("WritingBoxSel", "PmenuSel")
+  hl("WritingBoxDim", "Comment")
+  hl("WritingBoxFlag", "WarningMsg")
+  hl("WritingGhost", "Comment")
+  hl("WritingGhostNew", "DiffAdd")
+  hl("WritingDiffOld", "DiffDelete")
+  hl("WritingDiffNew", "DiffAdd")
+end
+
+local function label(key)
+  return KEY_LABELS[key] or key
+end
+
+local function wrap(text, width)
+  local out = {}
+  for _, para in ipairs(vim.split(text, "\n", { plain = true })) do
+    local line = ""
+    for word in para:gmatch("%S+") do
+      if line == "" then
+        line = word
+      elseif vim.fn.strdisplaywidth(line .. " " .. word) <= width then
+        line = line .. " " .. word
+      else
+        out[#out + 1] = line
+        line = word
+      end
+    end
+    out[#out + 1] = line
+  end
+  return out
+end
+
+local function short(text, max)
+  text = text:gsub("%s+", " ")
+  if vim.fn.strdisplaywidth(text) <= max then return text end
+  return vim.fn.strcharpart(text, 0, max - 1) .. "…"
+end
+
+local function footer(view, keys)
+  if view.status == "error" then return label(keys.ignore) .. " dismiss" end
+  if view.status == "loading" and not view.items then return label(keys.ignore) .. " cancel" end
+  local parts = {}
+  if view.kind == "synonyms" then parts[#parts + 1] = "1-4 pick" end
+  parts[#parts + 1] = keys.next .. "/" .. keys.prev .. " cycle"
+  if view.kind == "make_sense" then
+    parts[#parts + 1] = label(keys.accept) .. (view.confirmed and " apply" or " preview")
+  else
+    parts[#parts + 1] = label(keys.accept) .. " accept"
+  end
+  if view.kind == "variations" then
+    parts[#parts + 1] = keys.tighter .. keys.clearer .. keys.formal .. " tweak"
+  end
+  parts[#parts + 1] = keys.regenerate .. " redo"
+  parts[#parts + 1] = label(keys.ignore) .. " ignore"
+  return table.concat(parts, " · ")
+end
+
+function M.build_lines(view, keys, width)
+  local lines, marks = {}, {}
+  local counter = ""
+  if view.items and #view.items > 0 then counter = ("%d/%d"):format(view.index, #view.items) end
+  local suffix = view.status == "loading" and "  …" or ""
+  local head = ("%s · %s"):format(TITLES[view.kind] or "", short(view.target or "", width - 14))
+  lines[1] = head .. suffix .. (counter ~= "" and ("  " .. counter) or "")
+  marks[#marks + 1] = { row = 0, group = "WritingBoxDim" }
+
+  if view.status == "error" then
+    lines[#lines + 1] = short(view.message or "error", width)
+    marks[#marks + 1] = { row = #lines - 1, group = "WritingBoxFlag" }
+  elseif view.items then
+    for i, item in ipairs(view.items) do
+      local prefix = view.kind == "make_sense" and "" or (i .. " ")
+      local text = (item.label and view.kind == "make_sense") and (item.label .. ": " .. item.text) or item.text
+      local chunks = wrap(text, width - #prefix - 2)
+      local first = #lines
+      for j, chunk in ipairs(chunks) do
+        lines[#lines + 1] = (i == view.index and "▌ " or "  ") .. (j == 1 and prefix or string.rep(" ", #prefix)) .. chunk
+        if view.kind == "make_sense" and j > 3 then
+          lines[#lines] = lines[#lines]:sub(1, -2) .. "…"
+          break
+        end
+      end
+      if i == view.index then
+        for r = first, #lines - 1 do marks[#marks + 1] = { row = r, group = "WritingBoxSel" } end
+      end
+    end
+    if view.flags and #view.flags > 0 then
+      lines[#lines + 1] = "off-topic:"
+      marks[#marks + 1] = { row = #lines - 1, group = "WritingBoxFlag" }
+      for _, f in ipairs(view.flags) do
+        lines[#lines + 1] = "  · " .. short(f, width - 4)
+        marks[#marks + 1] = { row = #lines - 1, group = "WritingBoxFlag" }
+      end
+    end
+  end
+
+  lines[#lines + 1] = footer(view, keys)
+  marks[#marks + 1] = { row = #lines - 1, group = "WritingBoxDim" }
+  return lines, marks
+end
+
+local function ensure_window(width, height)
+  if not (state.buf and vim.api.nvim_buf_is_valid(state.buf)) then
+    state.buf = vim.api.nvim_create_buf(false, true)
+    vim.bo[state.buf].bufhidden = "wipe"
+  end
+  local config = {
+    relative = "editor", anchor = "NE", row = 1, col = vim.o.columns, width = width, height = height,
+    style = "minimal", border = "rounded", focusable = false, zindex = 60, noautocmd = true,
+  }
+  if state.win and vim.api.nvim_win_is_valid(state.win) then
+    vim.api.nvim_win_set_config(state.win, config)
+  else
+    state.win = vim.api.nvim_open_win(state.buf, false, config)
+    vim.wo[state.win].winhighlight = "NormalFloat:WritingBox,FloatBorder:WritingBoxBorder"
+    vim.wo[state.win].wrap = false
+  end
+end
+
+function M.close()
+  if state.win and vim.api.nvim_win_is_valid(state.win) then
+    pcall(vim.api.nvim_win_close, state.win, true)
+  end
+  state.win = nil
+  state.buf = nil
+  if state.target_buf and vim.api.nvim_buf_is_valid(state.target_buf) then
+    vim.api.nvim_buf_clear_namespace(state.target_buf, ghost_ns, 0, -1)
+  end
+end
+
+local function render_ghost(buf, view)
+  vim.api.nvim_buf_clear_namespace(buf, ghost_ns, 0, -1)
+  local ctx = view.ctx
+  if not ctx or not view.items or not view.items[view.index] then return end
+  local text = view.items[view.index].text
+
+  if view.kind == "make_sense" then
+    if not view.confirmed then return end
+    local virt = {}
+    for _, l in ipairs(vim.split(ctx.target, "\n", { plain = true })) do
+      virt[#virt + 1] = { { "- " .. l, "WritingDiffOld" } }
+    end
+    for _, l in ipairs(vim.split(text, "\n", { plain = true })) do
+      virt[#virt + 1] = { { "+ " .. l, "WritingDiffNew" } }
+    end
+    vim.api.nvim_buf_set_extmark(buf, ghost_ns, ctx.last - 1, 0, { virt_lines = virt })
+    return
+  end
+
+  local line = vim.api.nvim_buf_get_lines(buf, ctx.row - 1, ctx.row, false)[1] or ""
+  local replacement = text:gsub("%s*\n%s*", " ")
+  vim.api.nvim_buf_set_extmark(buf, ghost_ns, ctx.row - 1, 0, {
+    virt_lines = { {
+      { "↳ " .. line:sub(1, ctx.scol), "WritingGhost" },
+      { replacement, "WritingGhostNew" },
+      { line:sub(ctx.ecol + 1), "WritingGhost" },
+    } },
+  })
+end
+
+function M.render(view, keys, buf)
+  if view.status == "idle" then
+    M.close()
+    return
+  end
+  state.target_buf = buf
+  local width = math.max(30, math.min(56, vim.o.columns - 6))
+  local lines, marks = M.build_lines(view, keys, width)
+  ensure_window(width, #lines)
+  vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, lines)
+  vim.api.nvim_buf_clear_namespace(state.buf, ns, 0, -1)
+  for _, m in ipairs(marks) do
+    vim.api.nvim_buf_set_extmark(state.buf, ns, m.row, 0, { line_hl_group = m.group })
+  end
+  if view.status == "ready" or (view.status == "loading" and view.items) then
+    render_ghost(buf, view)
+  else
+    vim.api.nvim_buf_clear_namespace(buf, ghost_ns, 0, -1)
+  end
+end
+
+function M.window()
+  return state.win
+end
+
+return M
