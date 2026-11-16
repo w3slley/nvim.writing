@@ -224,15 +224,14 @@ return {
     end,
   },
   {
-    name = "regenerate bypasses cache and applies tweak",
+    name = "regenerate bypasses the cache and avoids what was already shown",
     fn = function()
       local h = harness()
       local ctx = sentence_ctx()
       h.core:trigger(ctx)
       reply(h.calls[1], { "On the mat the cat sat." })
-      h.core:regenerate("tighter")
+      h.core:regenerate()
       eq(#h.calls, 2)
-      eq(h.calls[2].req.system:find("tighter", 1, true) ~= nil, true)
       eq(h.calls[2].req.system:find("On the mat the cat sat.", 1, true) ~= nil, true)
       reply(h.calls[2], { "On the mat the cat sat.", "The cat sat upon the mat." })
       eq(#h.core.view.items, 1)

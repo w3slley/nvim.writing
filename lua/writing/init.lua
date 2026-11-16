@@ -16,6 +16,8 @@ local style_cache = {}
 local spell_ready = false
 local applying = false
 local enabled = true
+local layout = "popup"
+local preview = "below"
 local show_spell, hide_spell
 local spell = require("writing.spell")
 
@@ -154,9 +156,6 @@ local function map_keys(buf)
     end
   end)
   map(k.regenerate, function() core:regenerate() end)
-  map(k.tighter, function() core:regenerate("tighter") end)
-  map(k.clearer, function() core:regenerate("clearer") end)
-  map(k.formal, function() core:regenerate("formal") end)
 end
 
 local function on_change(view)
@@ -166,7 +165,7 @@ local function on_change(view)
     unmap_keys()
     return
   end
-  box.render(view, cfg.keys, buf, cfg.box.position)
+  box.render(view, cfg.keys, buf, { layout = layout, preview = preview, position = cfg.box.position })
   if core:visible() then
     map_keys(buf)
   else
@@ -292,6 +291,46 @@ function M.toggle()
   if enabled then M.burst_mode() else M.editor_mode() end
 end
 
+function M.set_layout(name)
+  if not vim.tbl_contains(box.LAYOUTS, name) then
+    return vim.notify("writing: unknown layout " .. tostring(name) .. " (" .. table.concat(box.LAYOUTS, ", ") .. ")", vim.log.levels.WARN)
+  end
+  layout = name
+  if core and core.view.status ~= "idle" then core:set_view(core.view) end
+  vim.notify("writing: layout " .. name)
+end
+
+function M.cycle_layout()
+  for i, name in ipairs(box.LAYOUTS) do
+    if name == layout then return M.set_layout(box.LAYOUTS[i % #box.LAYOUTS + 1]) end
+  end
+  M.set_layout(box.LAYOUTS[1])
+end
+
+function M.layout()
+  return layout
+end
+
+function M.set_preview(name)
+  if not vim.tbl_contains(box.PREVIEWS, name) then
+    return vim.notify("writing: unknown preview " .. tostring(name) .. " (" .. table.concat(box.PREVIEWS, ", ") .. ")", vim.log.levels.WARN)
+  end
+  preview = name
+  if core and core.view.status ~= "idle" then core:set_view(core.view) end
+  vim.notify("writing: preview " .. name)
+end
+
+function M.cycle_preview()
+  for i, name in ipairs(box.PREVIEWS) do
+    if name == preview then return M.set_preview(box.PREVIEWS[i % #box.PREVIEWS + 1]) end
+  end
+  M.set_preview(box.PREVIEWS[1])
+end
+
+function M.preview()
+  return preview
+end
+
 function M.statusline()
   return enabled and "EDITOR" or "BURST"
 end
@@ -354,6 +393,8 @@ function M.attach(buf)
   bmap({ "n", "x" }, k.make_sense, M.make_sense, "make sense")
   bmap("n", k.toggle, M.toggle, "switch burst/editor mode")
   vim.keymap.set({ "n", "i", "x" }, k.switch, M.toggle, { buffer = buf, silent = true, desc = "writing: switch burst/editor mode" })
+  bmap("n", k.layout, M.cycle_layout, "cycle suggestion layout")
+  bmap("n", k.preview, M.cycle_preview, "cycle change preview")
   bmap("n", k.burst, M.burst_mode, "burst mode")
   bmap("n", k.editor, M.editor_mode, "editor mode")
   bmap("n", k.manual, M.toggle_manual, "manual only")
@@ -379,6 +420,8 @@ end
 
 function M.setup(user)
   cfg = config_mod.resolve(user)
+  layout = cfg.box.layout
+  preview = cfg.box.preview
   log.setup(cfg.log_file)
   box.setup_highlights(cfg.spell.highlight)
 
@@ -413,6 +456,18 @@ function M.setup(user)
   vim.api.nvim_create_user_command("WritingNow", M.suggest_now, {})
   vim.api.nvim_create_user_command("WritingSense", M.make_sense, { range = true })
   vim.api.nvim_create_user_command("WritingToggle", M.toggle, {})
+  vim.api.nvim_create_user_command("WritingLayout", function(args)
+    if args.args == "" then M.cycle_layout() else M.set_layout(args.args) end
+  end, {
+    nargs = "?",
+    complete = function() return box.LAYOUTS end,
+  })
+  vim.api.nvim_create_user_command("WritingPreview", function(args)
+    if args.args == "" then M.cycle_preview() else M.set_preview(args.args) end
+  end, {
+    nargs = "?",
+    complete = function() return box.PREVIEWS end,
+  })
   vim.api.nvim_create_user_command("WritingBurst", function() M.burst_mode() end, {})
   vim.api.nvim_create_user_command("WritingEditor", function() M.editor_mode() end, {})
   vim.api.nvim_create_user_command("WritingManual", M.toggle_manual, {})

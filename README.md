@@ -1,6 +1,6 @@
 # nvim-writing
 
-A suggestion-first writing plugin for Neovim. A small box in the bottom-right corner offers alternatives for what you are writing, chosen by where the cursor is. Nothing in the buffer changes until you accept. There is no chat buffer.
+A suggestion-first writing plugin for Neovim. A small box under the text you are working on offers alternatives for it, chosen by where the cursor is. Nothing in the buffer changes until you accept. There is no chat buffer.
 
 Works in Markdown and plain text, in English and European Portuguese (PT-PT). The reply language follows the language of the sentence.
 
@@ -29,9 +29,34 @@ Details:
 
 - Typing a space after the period means a new sentence starts, so no suggestion appears.
 - Misspelled words get a red underline. Resting on one shows Neovim's spell suggestions. `Ctrl+r` then asks the LLM for more likely corrections and skips the ones already shown.
-- The word or sentence being changed is highlighted, and the highlighted suggestion is previewed as a ghost line below it.
+- The highlighted suggestion is previewed as a diff: the old text struck through and the new text in green (see Change preview).
 - Any typing or cursor movement cancels the pending request and closes the box. A response that arrives late is discarded.
 - Escaping a suggestion (`Esc`) is remembered for that text, so it does not nag again until the text changes.
+
+## Box layouts
+
+Where the suggestions appear is configurable. Switch live with `<leader>lv` or `:WritingLayout <name>` to compare them on your own text, and set a default with `box.layout`.
+
+| Layout | What it looks like |
+| --- | --- |
+| `popup` (default) | A small floating box right under the word or sentence, aligned with it. It flips above the text when there is no room below |
+| `list` | The alternatives drawn as extra lines directly under the text, no floating window. Pushes the text below it down while open |
+| `strip` | One compact line under the text with the alternatives side by side (synonyms, spelling, selections) or just a counter (sentences, where the change preview already shows the text) |
+| `corner` | The box pinned to the bottom-right corner above the mode badge |
+
+The box itself only lists the alternatives. The text being changed is not repeated inside it.
+
+## Change preview
+
+The highlighted alternative is previewed against your text as a diff: the old text struck through, the new text in green. Where it is drawn is configurable. Switch live with `<leader>ld` or `:WritingPreview <name>`, and set a default with `box.preview`.
+
+| Preview | What it looks like |
+| --- | --- |
+| `below` (default) | A line under the text: `~~bought~~ → acquired`, aligned with the word. Long sentences become the struck-through old sentence followed by the new one in green |
+| `above` | The same line, drawn above the text |
+| `inline` | The old text is struck through in place and the new text appears right after it, in green |
+
+For make-sense, the diff appears after the first accept, and the second accept applies it.
 
 ## Keys
 
@@ -43,7 +68,6 @@ Keys that act on a visible box are only mapped while the box is showing, so they
 | `<S-Tab>` | Cycle to the next suggestion |
 | `<A-k>` | Previous suggestion |
 | `<C-r>` | More: request new suggestions that avoid the ones already shown |
-| `<A-t>` `<A-c>` `<A-f>` | Regenerate tighter, clearer or more formal (variations and selections) |
 | `<Esc>` | Ignore, or cancel a request in flight |
 
 Keys that are always available in attached buffers:
@@ -55,6 +79,8 @@ Keys that are always available in attached buffers:
 | `<leader>lp` | Make sense, on the paragraph or the visual selection |
 | `<leader>lt` | Switch between burst and editor mode |
 | `<leader>lb` / `<leader>le` | Go to burst / editor mode |
+| `<leader>lv` | Cycle the box layout (popup, list, strip, corner) |
+| `<leader>ld` | Cycle the change preview (below, above, inline) |
 | `<leader>lm` | Manual only: stop ambient suggestions, keep the keys |
 | `<A-m>` | Switch mode (also in insert and visual mode) |
 
@@ -183,7 +209,7 @@ require("writing").setup({
   },
   max_requests_per_minute = 30,
   counts = { synonyms = 4, variations = 3, make_sense = 2, selection = 3, spelling = 4 },
-  box = { position = "bottom_right", badge = true },
+  box = { layout = "popup", preview = "below", position = "bottom_right", badge = true },
   providers = { fast = {}, strong = {} },
   keys = {},
 })
@@ -191,15 +217,17 @@ require("writing").setup({
 
 - `mode`: `"editor"` or `"burst"` at startup.
 - `spell.while_typing`: also show spelling suggestions right after you type a misspelled word and a space. Off by default.
-- `box.position`: `"bottom_right"` or `"top_right"`.
+- `box.layout`: `"popup"`, `"list"`, `"strip"` or `"corner"`.
+- `box.preview`: `"below"`, `"above"` or `"inline"`.
+- `box.position`: `"bottom_right"` or `"top_right"`. Used by the `corner` layout and the mode badge.
 - `box.badge`: show the always-on mode badge.
 - `style_file`: a `.writing-style.md` file at the project root (tone, words to avoid, glossary) is added to every prompt.
 - `disable_file`: a `.writing-off` file in a folder disables the plugin for those files.
-- Highlight groups you can override: `WritingBadgeEditor`, `WritingBadgeBurst`, `WritingTarget`, `WritingGhost`, `WritingBox`, `WritingBoxSel`.
+- Highlight groups you can override: `WritingBadgeEditor`, `WritingBadgeBurst`, `WritingTarget`, `WritingOld`, `WritingNew`, `WritingBox`, `WritingBoxSel`, `WritingBoxDim`.
 
 ## Commands
 
-`:WritingNow`, `:WritingSense`, `:WritingToggle`, `:WritingBurst`, `:WritingEditor`, `:WritingManual`, `:WritingAttach`, `:WritingSpellInstall`, `:WritingLog`.
+`:WritingNow`, `:WritingSense`, `:WritingLayout [name]`, `:WritingPreview [name]`, `:WritingToggle`, `:WritingBurst`, `:WritingEditor`, `:WritingManual`, `:WritingAttach`, `:WritingSpellInstall`, `:WritingLog`.
 
 `:WritingLog` opens the request log. Every request records provider, model, time to first token and total time, plus accept, ignore and regenerate events, so you can see which modes are worth keeping.
 

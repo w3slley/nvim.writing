@@ -20,6 +20,8 @@ M.defaults = {
     make_sense = "<leader>lp",
     toggle = "<leader>lt",
     switch = "<A-m>",
+    layout = "<leader>lv",
+    preview = "<leader>ld",
     burst = "<leader>lb",
     editor = "<leader>le",
     manual = "<leader>lm",
@@ -28,11 +30,8 @@ M.defaults = {
     accept = "<Tab>",
     ignore = "<Esc>",
     regenerate = "<C-r>",
-    tighter = "<A-t>",
-    clearer = "<A-c>",
-    formal = "<A-f>",
   },
-  box = { position = "bottom_right", badge = true },
+  box = { layout = "popup", preview = "below", position = "bottom_right", badge = true },
 }
 
 function M.resolve(user)

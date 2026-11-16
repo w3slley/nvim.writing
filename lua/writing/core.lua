@@ -117,7 +117,7 @@ end
 function Core:fire(ctx, opts)
   opts = opts or {}
   local style = self.style()
-  local cache_key = table.concat({ ctx.kind, ctx.target, ctx.previous or "", opts.tweak or "", style or "" }, "\1")
+  local cache_key = table.concat({ ctx.kind, ctx.target, ctx.previous or "", style or "" }, "\1")
 
   self:cancel_pending()
   local id = self.req_id
@@ -165,7 +165,7 @@ function Core:fire(ctx, opts)
   })
 
   local req = prompts.build(ctx, {
-    counts = self.config.counts, style = style, tweak = opts.tweak, avoid = opts.shown,
+    counts = self.config.counts, style = style, avoid = opts.shown,
     temperature = opts.shown and #opts.shown > 0 and 0.95 or nil,
   })
 
@@ -259,12 +259,12 @@ function Core:ignore()
   return true
 end
 
-function Core:regenerate(tweak)
+function Core:regenerate()
   local cur = self.current
   if not cur or self.view.status == "idle" then return false end
-  self.log({ event = "regenerate", kind = cur.ctx.kind, tweak = tweak })
+  self.log({ event = "regenerate", kind = cur.ctx.kind })
   self:fire(cur.ctx, vim.tbl_extend("force", cur.opts, {
-    tweak = tweak or cur.opts.tweak, fresh = true, manual = true, shown = cur.shown,
+    fresh = true, manual = true, shown = cur.shown,
     llm = cur.ctx.kind == "spelling" or nil,
   }))
   return true

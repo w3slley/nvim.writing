@@ -20,11 +20,9 @@ function M.setup_highlights(spell_highlight)
   hl("WritingBoxSel", "PmenuSel")
   hl("WritingBoxDim", "Comment")
   hl("WritingBoxFlag", "WarningMsg")
-  hl("WritingGhost", "Comment")
   hl("WritingTarget", "Visual")
-  hl("WritingGhostNew", "DiffAdd")
-  hl("WritingDiffOld", "DiffDelete")
-  hl("WritingDiffNew", "DiffAdd")
+  vim.api.nvim_set_hl(0, "WritingOld", { strikethrough = true, fg = "#e06c75", default = true })
+  vim.api.nvim_set_hl(0, "WritingNew", { fg = "#98c379", bold = true, default = true })
   hl("WritingBadgeEditor", "DiffAdd")
   hl("WritingBadgeBurst", "DiffChange")
 end
@@ -72,9 +70,6 @@ local function footer(view, keys)
   else
     parts[#parts + 1] = label(keys.accept) .. " accept"
   end
-  if view.kind == "variations" or view.kind == "selection" then
-    parts[#parts + 1] = label(keys.tighter) .. label(keys.clearer):gsub("^⌥", "") .. label(keys.formal):gsub("^⌥", "") .. " tweak"
-  end
   parts[#parts + 1] = label(keys.regenerate) .. " more"
   parts[#parts + 1] = label(keys.ignore) .. " ignore"
   return table.concat(parts, " · ")
@@ -85,8 +80,7 @@ function M.build_lines(view, keys, width)
   local counter = ""
   if view.items and #view.items > 0 then counter = ("%d/%d"):format(view.index, #view.items) end
   local suffix = view.status == "loading" and "  …" or ""
-  local head = ("%s · %s"):format(TITLES[view.kind] or "", short(view.target or "", width - 14))
-  lines[1] = head .. suffix .. (counter ~= "" and ("  " .. counter) or "")
+  lines[1] = (TITLES[view.kind] or "") .. suffix .. (counter ~= "" and ("  " .. counter) or "")
   marks[#marks + 1] = { row = 0, group = "WritingBoxDim" }
 
   if view.status == "error" then
@@ -138,17 +132,19 @@ local function corner(position, offset)
   return bottom and "SE" or "NE", bottom and base - offset or base + offset
 end
 
-local function ensure_window(width, height, position)
+M.LAYOUTS = { "popup", "list", "strip", "corner" }
+
+local STRIP_KINDS = { synonyms = true, spelling = true, selection = true }
+
+local function ensure_window(width, height, placement)
   if not (state.buf and vim.api.nvim_buf_is_valid(state.buf)) then
     state.buf = vim.api.nvim_create_buf(false, true)
     vim.bo[state.buf].bufhidden = "wipe"
   end
-  local anchor, row = corner(position, badge_open() and 1 or 0)
-  local config = {
-    relative = "editor", anchor = anchor, col = vim.o.columns, row = row,
-    width = width, height = height,
+  local config = vim.tbl_extend("force", {
+    relative = "editor", width = width, height = height,
     style = "minimal", border = "rounded", focusable = false, zindex = 60, noautocmd = true,
-  }
+  }, placement)
   if state.win and vim.api.nvim_win_is_valid(state.win) then
     vim.api.nvim_win_set_config(state.win, config)
   else
@@ -158,76 +154,210 @@ local function ensure_window(width, height, position)
   end
 end
 
-function M.close()
+local function close_float()
   if state.win and vim.api.nvim_win_is_valid(state.win) then
     pcall(vim.api.nvim_win_close, state.win, true)
   end
   state.win = nil
   state.buf = nil
+end
+
+function M.close()
+  close_float()
   if state.target_buf and vim.api.nvim_buf_is_valid(state.target_buf) then
     vim.api.nvim_buf_clear_namespace(state.target_buf, ghost_ns, 0, -1)
     vim.api.nvim_buf_clear_namespace(state.target_buf, target_ns, 0, -1)
   end
 end
 
-local function render_target(buf, view)
+M.PREVIEWS = { "below", "above", "inline" }
+
+local function render_target(buf, view, strike)
   vim.api.nvim_buf_clear_namespace(buf, target_ns, 0, -1)
   local ctx = view.ctx
   if not (ctx and HIGHLIGHTED[view.kind]) then return end
   vim.api.nvim_buf_set_extmark(buf, target_ns, ctx.row - 1, ctx.scol, {
-    end_row = ctx.row - 1, end_col = ctx.ecol, hl_group = "WritingTarget", priority = 150,
+    end_row = ctx.row - 1, end_col = ctx.ecol, hl_group = strike and "WritingOld" or "WritingTarget", priority = 150,
   })
 end
 
-local function render_ghost(buf, view)
-  vim.api.nvim_buf_clear_namespace(buf, ghost_ns, 0, -1)
+local function wrapped_virt(text, width, group)
+  local out = {}
+  for _, line in ipairs(wrap(text, width)) do out[#out + 1] = { { line, group } } end
+  return out
+end
+
+local function build_preview(buf, view, style)
   local ctx = view.ctx
-  if not ctx or not view.items or not view.items[view.index] then return end
-  local text = view.items[view.index].text
+  local item = view.items and view.items[view.index]
+  if not (ctx and item) then return nil end
+  local above = style == "above"
 
   if view.kind == "make_sense" then
-    if not view.confirmed then return end
+    if not view.confirmed then return nil end
     local virt = {}
-    for _, l in ipairs(vim.split(ctx.target, "\n", { plain = true })) do
-      virt[#virt + 1] = { { "- " .. l, "WritingDiffOld" } }
-    end
-    for _, l in ipairs(vim.split(text, "\n", { plain = true })) do
-      virt[#virt + 1] = { { "+ " .. l, "WritingDiffNew" } }
-    end
-    vim.api.nvim_buf_set_extmark(buf, ghost_ns, ctx.last - 1, 0, { virt_lines = virt })
-    return
+    for _, l in ipairs(vim.split(ctx.target, "\n", { plain = true })) do virt[#virt + 1] = { { l, "WritingOld" } } end
+    for _, l in ipairs(vim.split(item.text, "\n", { plain = true })) do virt[#virt + 1] = { { l, "WritingNew" } } end
+    return { lines = virt, above = above, row = (above and ctx.first or ctx.last) - 1 }
   end
 
+  local new = item.text:gsub("%s*\n%s*", " ")
+  if style == "inline" then
+    return { inline = { row = ctx.row - 1, col = ctx.ecol, text = " " .. new }, strike = true }
+  end
+
+  local win = vim.fn.bufwinid(buf)
+  local avail = (win ~= -1 and vim.api.nvim_win_get_width(win) or vim.o.columns) - 6
   local line = vim.api.nvim_buf_get_lines(buf, ctx.row - 1, ctx.row, false)[1] or ""
-  local replacement = text:gsub("%s*\n%s*", " ")
-  vim.api.nvim_buf_set_extmark(buf, ghost_ns, ctx.row - 1, 0, {
-    virt_lines = { {
-      { "↳ " .. line:sub(1, ctx.scol), "WritingGhost" },
-      { replacement, "WritingGhostNew" },
-      { line:sub(ctx.ecol + 1), "WritingGhost" },
-    } },
-  })
+  local old = line:sub(ctx.scol + 1, ctx.ecol)
+  local indent = math.min(vim.fn.strdisplaywidth(line:sub(1, ctx.scol)), 40)
+  local joined = vim.fn.strdisplaywidth(old) + vim.fn.strdisplaywidth(new) + 3
+
+  local virt
+  if indent + joined <= avail then
+    virt = { {
+      { string.rep(" ", indent), "WritingBoxDim" },
+      { old, "WritingOld" },
+      { " → ", "WritingBoxDim" },
+      { new, "WritingNew" },
+    } }
+  else
+    virt = wrapped_virt(old, avail, "WritingOld")
+    vim.list_extend(virt, wrapped_virt(new, avail, "WritingNew"))
+  end
+  return { lines = virt, above = above, row = ctx.row - 1 }
 end
 
-function M.render(view, keys, buf, position)
+local function panel_lines(lines, marks, width)
+  local groups = {}
+  for _, m in ipairs(marks) do groups[m.row] = m.group end
+  local virt = {}
+  for i, line in ipairs(lines) do
+    local padded = " " .. line .. string.rep(" ", math.max(0, width - vim.fn.strdisplaywidth(line))) .. " "
+    virt[#virt + 1] = { { padded, groups[i - 1] or "WritingBox" } }
+  end
+  return virt
+end
+
+local function strip_line(view, keys)
+  local chunks = { { " ", "WritingBox" } }
+  local function add(text, group) chunks[#chunks + 1] = { text, group } end
+
+  if view.status == "error" then
+    add(" " .. short(view.message or "error", 60) .. " ", "WritingBoxFlag")
+    add("  " .. label(keys.ignore) .. " dismiss", "WritingBoxDim")
+    return { chunks }
+  end
+
+  if view.items and #view.items > 0 then
+    local total = 0
+    for _, item in ipairs(view.items) do total = total + vim.fn.strdisplaywidth(item.text) + 3 end
+    if STRIP_KINDS[view.kind] and total <= vim.o.columns - 50 then
+      for i, item in ipairs(view.items) do
+        add(" " .. item.text .. " ", i == view.index and "WritingBoxSel" or "WritingBox")
+      end
+    else
+      add(" " .. (TITLES[view.kind] or "") .. " ", "WritingBoxDim")
+    end
+    add(("  %d/%d"):format(view.index, #view.items), "WritingBoxDim")
+  else
+    add(" " .. (TITLES[view.kind] or "") .. " ", "WritingBoxDim")
+  end
+  if view.status == "loading" then add("  …", "WritingBoxDim") end
+  local accept = view.kind == "make_sense" and (view.confirmed and " apply" or " preview") or " accept"
+  add(("   %s%s  %s next  %s more  %s"):format(label(keys.accept), accept, label(keys.next), label(keys.regenerate), label(keys.ignore)), "WritingBoxDim")
+  return { chunks }
+end
+
+local function popup_placement(buf, view, height, width, below_rows, above_rows)
+  local ctx = view.ctx
+  local win = vim.fn.bufwinid(buf)
+  if win == -1 or not ctx then return nil end
+  local first_row = ctx.first or ctx.row
+  local last_row = ctx.last or ctx.row
+  local first = vim.fn.screenpos(win, first_row, math.max(1, (ctx.scol or 0) + 1))
+  local last_line = vim.api.nvim_buf_get_lines(buf, last_row - 1, last_row, false)[1] or ""
+  local last = vim.fn.screenpos(win, last_row, math.max(1, #last_line))
+  if first.row == 0 or last.row == 0 then return nil end
+
+  first.row = first.row + above_rows
+  last.row = last.row + above_rows
+  local limit = vim.o.lines - vim.o.cmdheight - (vim.o.laststatus > 0 and 1 or 0)
+  local col = math.max(0, math.min(first.col - 1, vim.o.columns - width - 2))
+  local below = last.row + below_rows
+  if below + height + 2 <= limit then
+    return { anchor = "NW", row = below, col = col }
+  end
+  if first.row - 1 - above_rows - height - 2 >= 0 then
+    return { anchor = "SW", row = first.row - 1 - above_rows, col = col }
+  end
+  return nil
+end
+
+function M.render(view, keys, buf, opts)
+  opts = opts or {}
+  local layout = opts.layout or "popup"
   if view.status == "idle" then
     M.close()
     return
   end
   state.target_buf = buf
+  vim.api.nvim_buf_clear_namespace(buf, ghost_ns, 0, -1)
+
+  local showing_items = view.status == "ready" or (view.status == "loading" and view.items)
+  local pv = showing_items and build_preview(buf, view, opts.preview or "below") or nil
+  render_target(buf, view, pv and pv.strike)
+
+  local below_rows = (pv and pv.lines and not pv.above) and #pv.lines or 0
+  local above_rows = (pv and pv.lines and pv.above) and #pv.lines or 0
+  local extra = {}
   local width = math.max(30, math.min(56, vim.o.columns - 6))
-  local lines, marks = M.build_lines(view, keys, width)
-  ensure_window(width, #lines, position)
-  vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, lines)
-  vim.api.nvim_buf_clear_namespace(state.buf, ns, 0, -1)
-  for _, m in ipairs(marks) do
-    vim.api.nvim_buf_set_extmark(state.buf, ns, m.row, 0, { line_hl_group = m.group })
-  end
-  render_target(buf, view)
-  if view.status == "ready" or (view.status == "loading" and view.items) then
-    render_ghost(buf, view)
+
+  if layout == "popup" or layout == "corner" then
+    local lines, marks = M.build_lines(view, keys, width)
+    local box_width = width
+    if layout == "popup" then
+      box_width = 24
+      for _, line in ipairs(lines) do box_width = math.max(box_width, vim.fn.strdisplaywidth(line)) end
+      box_width = math.min(box_width, width)
+    end
+    local placement = layout == "popup" and popup_placement(buf, view, #lines, box_width, below_rows, above_rows) or nil
+    if not placement then
+      local anchor, row = corner(opts.position, badge_open() and 1 or 0)
+      placement = { anchor = anchor, row = row, col = vim.o.columns }
+      box_width = width
+    end
+    ensure_window(box_width, #lines, placement)
+    vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, lines)
+    vim.api.nvim_buf_clear_namespace(state.buf, ns, 0, -1)
+    for _, m in ipairs(marks) do
+      vim.api.nvim_buf_set_extmark(state.buf, ns, m.row, 0, { line_hl_group = m.group })
+    end
   else
-    vim.api.nvim_buf_clear_namespace(buf, ghost_ns, 0, -1)
+    close_float()
+    if layout == "list" then
+      local lines, marks = M.build_lines(view, keys, width)
+      extra = panel_lines(lines, marks, width)
+    else
+      extra = strip_line(view, keys)
+    end
+  end
+
+  local ctx = view.ctx
+  local below = {}
+  if pv and pv.lines and not pv.above then vim.list_extend(below, pv.lines) end
+  vim.list_extend(below, extra)
+  if pv and pv.lines and pv.above then
+    vim.api.nvim_buf_set_extmark(buf, ghost_ns, pv.row, 0, { virt_lines = pv.lines, virt_lines_above = true })
+  end
+  if #below > 0 then
+    local row = (pv and pv.lines and not pv.above) and pv.row or ((ctx.last or ctx.row) - 1)
+    vim.api.nvim_buf_set_extmark(buf, ghost_ns, row, 0, { virt_lines = below })
+  end
+  if pv and pv.inline then
+    vim.api.nvim_buf_set_extmark(buf, ghost_ns, pv.inline.row, pv.inline.col, {
+      virt_text = { { pv.inline.text, "WritingNew" } }, virt_text_pos = "inline",
+    })
   end
 end
 

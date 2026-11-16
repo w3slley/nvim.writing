@@ -11,12 +11,6 @@ local LANG_RULE = {
     .. "Avoid Brazilian vocabulary, spelling and constructions (use 'estou a fazer', not 'estou fazendo').",
 }
 
-local TWEAK = {
-  tighter = "Make every alternative tighter: fewer words, no filler.",
-  clearer = "Make every alternative clearer and more direct.",
-  formal = "Make every alternative more formal in register.",
-}
-
 local ITEMS_SCHEMA = {
   type = "object",
   properties = { items = { type = "array", items = { type = "string" } } },
@@ -87,7 +81,6 @@ function M.build(ctx, opts)
       .. "alternatives for that word, spelled correctly. Ignore any other typos elsewhere in the sentence; they are "
       .. "not the target."
   end
-  if opts.tweak and TWEAK[opts.tweak] then system[#system + 1] = TWEAK[opts.tweak] end
   if opts.avoid and #opts.avoid > 0 then
     system[#system + 1] = "Already suggested, do not repeat or paraphrase these:\n- " .. table.concat(opts.avoid, "\n- ")
   end

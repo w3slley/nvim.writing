@@ -6,6 +6,9 @@ end
 
 local function respond(req)
   if req.kind == "synonyms" then return { items = { "nice", "pleasant", "fine", "sunny" } } end
+  if req.kind == "variations" and req.user:find("dog", 1, true) then
+    return { items = { "The cat sat on the mat while the dog slept near the fire and the birds sang outside." } }
+  end
   if req.kind == "spelling" then return { items = { "tea", "ten", "tech" } } end
   if req.kind == "selection" then return { items = { "walked fast", "strolled swiftly" } } end
   if req.kind == "variations" then
@@ -220,6 +223,7 @@ return {
     name = "suggestion box stacks above the badge without overlapping it",
     fn = function()
       local writing, buf = fresh({ "The weather is lovely today." })
+      writing.set_layout("corner")
       vim.api.nvim_win_set_cursor(0, { 1, 16 })
       event(buf)
       wait_ready(writing)
@@ -328,6 +332,133 @@ return {
       writing.synonyms_now()
       core = wait_ready(writing)
       eq(core.view.kind, "synonyms")
+    end,
+  },
+  {
+    name = "popup layout sits under the text being changed, aligned with it, and flips above near the bottom",
+    fn = function()
+      local lines = { "first line here", "The weather is lovely today.", "third line" }
+      local writing, buf = fresh(lines)
+      local box = require("writing.box")
+      eq(writing.layout(), "popup")
+      vim.api.nvim_win_set_cursor(0, { 2, 16 })
+      event(buf)
+      wait_ready(writing)
+      vim.cmd("redraw")
+      local cfg = vim.api.nvim_win_get_config(box.window())
+      local at = vim.fn.screenpos(0, 2, 16)
+      eq(cfg.anchor, "NW")
+      eq(cfg.row, at.row + 1)
+      eq(cfg.col, at.col - 1)
+      writing._core():ignore()
+
+      local many = {}
+      for i = 1, vim.o.lines - 3 do many[i] = "line " .. i end
+      many[#many + 1] = "The weather is lovely today."
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, many)
+      vim.api.nvim_win_set_cursor(0, { #many, 16 })
+      event(buf)
+      wait_ready(writing)
+      vim.cmd("redraw")
+      cfg = vim.api.nvim_win_get_config(box.window())
+      eq(cfg.anchor, "SW")
+    end,
+  },
+  {
+    name = "list and strip layouts draw inside the buffer with no float, and switching layouts re-renders live",
+    fn = function()
+      local writing, buf = fresh({ "The weather is lovely today." })
+      local box = require("writing.box")
+      local ghost_ns = vim.api.nvim_create_namespace("writing_ghost")
+      local function virt()
+        local m = vim.api.nvim_buf_get_extmarks(buf, ghost_ns, 0, -1, { details = true })[1]
+        return m and #m[4].virt_lines or 0
+      end
+      vim.api.nvim_win_set_cursor(0, { 1, 16 })
+      event(buf)
+      wait_ready(writing)
+      eq(box.window() ~= nil, true)
+      eq(virt(), 1)
+
+      writing.set_layout("list")
+      eq(box.window(), nil)
+      eq(virt() > 4, true)
+
+      writing.set_layout("strip")
+      eq(box.window(), nil)
+      eq(virt(), 2)
+
+      writing.set_layout("popup")
+      eq(box.window() ~= nil, true)
+      eq(virt(), 1)
+
+      writing.cycle_layout()
+      eq(writing.layout(), "list")
+      writing.cycle_layout()
+      writing.cycle_layout()
+      eq(writing.layout(), "corner")
+      writing.cycle_layout()
+      eq(writing.layout(), "popup")
+    end,
+  },
+  {
+    name = "change preview: old text struck through and new text green, below, above, or inline",
+    fn = function()
+      local writing, buf = fresh({ "The weather is lovely today." })
+      local ghost_ns = vim.api.nvim_create_namespace("writing_ghost")
+      local target_ns = vim.api.nvim_create_namespace("writing_target")
+      local function marks(ns) return vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, { details = true }) end
+      local function has(d, group, text)
+        local found = false
+        for _, line in ipairs(d.virt_lines or {}) do
+          for _, chunk in ipairs(line) do
+            if chunk[1] == text and tostring(chunk[2]):find(group, 1, true) then found = true end
+          end
+        end
+        return found
+      end
+      vim.api.nvim_win_set_cursor(0, { 1, 16 })
+      event(buf)
+      wait_ready(writing)
+
+      eq(writing.preview(), "below")
+      local d = marks(ghost_ns)[1][4]
+      eq(not d.virt_lines_above, true)
+      eq(has(d, "WritingOld", "lovely"), true)
+      eq(has(d, "WritingNew", "nice"), true)
+      eq(marks(target_ns)[1][4].hl_group, "WritingTarget")
+
+      writing.set_preview("above")
+      d = marks(ghost_ns)[1][4]
+      eq(d.virt_lines_above, true)
+      eq(has(d, "WritingOld", "lovely"), true)
+
+      writing.set_preview("inline")
+      d = marks(ghost_ns)[1][4]
+      eq(d.virt_lines, nil)
+      eq(d.virt_text_pos, "inline")
+      eq(d.virt_text[1][1], " nice")
+      eq(marks(target_ns)[1][4].hl_group, "WritingOld")
+
+      writing.cycle_preview()
+      eq(writing.preview(), "below")
+    end,
+  },
+  {
+    name = "a long sentence preview wraps into struck-through old lines followed by green new lines",
+    fn = function()
+      local text = "The cat sat on the mat while the dog slept near the fire and the birds sang loudly outside."
+      local writing, buf = fresh({ "Intro line. " .. text })
+      local ghost_ns = vim.api.nvim_create_namespace("writing_ghost")
+      local line = vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1]
+      vim.api.nvim_win_set_cursor(0, { 1, #line - 1 })
+      event(buf)
+      local core = wait_ready(writing)
+      eq(core.view.kind, "variations")
+      local d = vim.api.nvim_buf_get_extmarks(buf, ghost_ns, 0, -1, { details = true })[1][4]
+      eq(#d.virt_lines >= 2, true)
+      eq(tostring(d.virt_lines[1][1][2]):find("WritingOld", 1, true) ~= nil, true)
+      eq(tostring(d.virt_lines[#d.virt_lines][1][2]):find("WritingNew", 1, true) ~= nil, true)
     end,
   },
 }
