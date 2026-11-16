@@ -556,4 +556,46 @@ return {
       eq(tostring(d.virt_lines[#d.virt_lines][1][2]):find("WritingNew", 1, true) ~= nil, true)
     end,
   },
+  {
+    name = "adding a misspelled word to the dictionary stops it being flagged",
+    fn = function()
+      local spellfile = vim.fn.tempname() .. ".utf-8.add"
+      local writing, buf = fresh({ "I like zzqword a lot." }, {})
+      vim.bo[buf].spellfile = spellfile
+      local spell = require("writing.spell")
+      eq(spell.is_bad("zzqword"), true)
+      vim.api.nvim_win_set_cursor(0, { 1, 9 })
+      writing.spell_add()
+      eq(spell.is_bad("zzqword"), false)
+      eq(vim.fn.readfile(spellfile), { "zzqword" })
+    end,
+  },
+  {
+    name = "adding several words adds each one separately",
+    fn = function()
+      local spellfile = vim.fn.tempname() .. ".utf-8.add"
+      local writing, buf = fresh({ "x" }, {})
+      vim.bo[buf].spellfile = spellfile
+      local spell = require("writing.spell")
+      eq(spell.add("zzqone zzqtwo", 1), { "zzqone", "zzqtwo" })
+      eq(spell.is_bad("zzqone"), false)
+      eq(spell.is_bad("zzqtwo"), false)
+    end,
+  },
+  {
+    name = "removing a word from the dictionary flags it again and leaves built-in words alone",
+    fn = function()
+      local spellfile = vim.fn.tempname() .. ".utf-8.add"
+      local writing, buf = fresh({ "I like zzqword a lot." }, {})
+      vim.bo[buf].spellfile = spellfile
+      local spell = require("writing.spell")
+      spell.add("zzqword", 1)
+      eq(spell.is_bad("zzqword"), false)
+      vim.api.nvim_win_set_cursor(0, { 1, 9 })
+      writing.spell_remove()
+      eq(spell.is_bad("zzqword"), true)
+      eq(spell.remove("house", 1), {})
+      eq(spell.is_bad("house"), false)
+    end,
+  },
 }

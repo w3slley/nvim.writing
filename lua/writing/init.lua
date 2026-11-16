@@ -381,6 +381,34 @@ function M.define(word)
   define.open(word)
 end
 
+local function spell_edit(op, word, lang)
+  if not spell_ready then return vim.notify("writing: spelling is off (run :WritingSpellInstall)", vim.log.levels.WARN) end
+  local buf = vim.api.nvim_get_current_buf()
+  if not word then
+    local row, col = unpack(vim.api.nvim_win_get_cursor(0))
+    local w = context.word_at(vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1] or "", col)
+    word = w and w.text
+  end
+  if not word or word == "" then return vim.notify("writing: put the cursor on a word", vim.log.levels.INFO) end
+  local index = lang and vim.fn.index(cfg.spell.langs, lang) + 1 or 1
+  if index == 0 then return vim.notify("writing: " .. lang .. " is not in spell.langs", vim.log.levels.ERROR) end
+  local done = op(word, index)
+  if #done == 0 then return vim.notify("writing: nothing changed for " .. word, vim.log.levels.WARN) end
+  core:cancel_pending()
+  core:clear()
+  return done
+end
+
+function M.spell_add(word, lang)
+  local added = spell_edit(spell.add, word, lang)
+  if added then vim.notify("writing: added to dictionary: " .. table.concat(added, ", ")) end
+end
+
+function M.spell_remove(word, lang)
+  local removed = spell_edit(spell.remove, word, lang)
+  if removed then vim.notify("writing: removed from dictionary: " .. table.concat(removed, ", ")) end
+end
+
 function M.attach(buf)
   buf = buf or vim.api.nvim_get_current_buf()
   if not active or vim.b[buf].writing_attached then return end
@@ -427,6 +455,8 @@ function M.attach(buf)
   bmap("n", k.describe, M.describe, "find a word from a description")
   if k.describe_insert then bmap("i", k.describe_insert, M.describe, "find a word from a description") end
   bmap("n", k.define, function() M.define() end, "meaning of the word under the cursor")
+  bmap("n", k.spell_add, function() M.spell_add() end, "add the word to the dictionary")
+  bmap("n", k.spell_remove, function() M.spell_remove() end, "remove the word from the dictionary")
 end
 
 function M.detach(buf)
@@ -588,6 +618,17 @@ function M.setup(user)
       vim.notify(ok and "writing: spell files installed" or "writing: spell download failed", ok and vim.log.levels.INFO or vim.log.levels.ERROR)
     end)
   end, {})
+  for name, fn in pairs({ WritingSpellAdd = M.spell_add, WritingSpellRemove = M.spell_remove }) do
+    vim.api.nvim_create_user_command(name, function(args)
+      local lang, word = args.args:match("^(%a+)%s+(.+)$")
+      if lang and not vim.tbl_contains(cfg.spell.langs, lang) then lang, word = nil, args.args end
+      word = word or args.args
+      fn(word ~= "" and word or nil, lang)
+    end, {
+      nargs = "*",
+      complete = function() return cfg.spell.langs end,
+    })
+  end
   command("WritingDescribe", M.describe)
   command("WritingDefine", function(args)
     M.define(args.args ~= "" and args.args or nil)

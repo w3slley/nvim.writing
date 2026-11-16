@@ -167,6 +167,7 @@ Always available in attached buffers:
 | `<leader>lm` | Manual only: no ambient suggestions, keys kept |
 | `<leader>lw` / `<A-w>` | Find a word from a description |
 | `<leader>lk` | Look up a word's meaning |
+| `<leader>la` / `<leader>lr` | Add / remove the word under the cursor in the spell dictionary |
 
 If you also map plain `<leader>l`, Neovim waits for `timeoutlen` on these keys. Every key can be changed in `setup()`.
 
@@ -247,6 +248,7 @@ The CLI must be logged in (`claude`, then `/login`).
 
 - Spelling needs every language in `spell.langs` installed. If one is missing, spelling is turned off with a warning.
 - The Portuguese dictionary accepts European and Brazilian spellings, so it catches typos but does not enforce PT-PT. The LLM prompts do.
+- `<leader>la` or `:WritingSpellAdd [lang] [words]` adds words to your personal dictionary (stored in `stdpath("data")/site/spell/`). They stop being underlined and suggested against. `lang` picks which of `spell.langs` gets them (default: the first). Several words are added one by one, since the checker works on single words. `<leader>lr` or `:WritingSpellRemove` takes a word back out. It only affects words you added, never the built-in dictionary.
 - `spell.highlight` controls the underline, and only changes the window option the plugin itself set.
 
 ## Configuration
@@ -304,7 +306,7 @@ end, { desc = "writing: on/off" })
 
 ## Commands
 
-`:WritingEnable`, `:WritingDisable`, `:WritingNow`, `:WritingSense`, `:WritingPreview [name]`, `:WritingToggle`, `:WritingBurst`, `:WritingEditor`, `:WritingManual`, `:WritingAttach`, `:WritingSpellInstall`, `:WritingDescribe`, `:WritingDefine [word]`, `:WritingDictInstall [en|pt]`, `:WritingLog`.
+`:WritingEnable`, `:WritingDisable`, `:WritingNow`, `:WritingSense`, `:WritingPreview [name]`, `:WritingToggle`, `:WritingBurst`, `:WritingEditor`, `:WritingManual`, `:WritingAttach`, `:WritingSpellInstall`, `:WritingSpellAdd [lang] [words]`, `:WritingSpellRemove [lang] [words]`, `:WritingDescribe`, `:WritingDefine [word]`, `:WritingDictInstall [en|pt]`, `:WritingLog`.
 
 `:WritingLog` opens the request log: provider, model, time to first token, total time, and accept, ignore and regenerate events.
 

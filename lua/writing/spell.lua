@@ -35,6 +35,24 @@ function M.suggest(word, n)
   return vim.fn.spellsuggest(word, n)
 end
 
+function M.add(text, index)
+  vim.fn.mkdir(site_dir() .. "/spell", "p")
+  local added = {}
+  for word in text:gmatch("[^%s|\"]+") do
+    if pcall(vim.cmd, ("silent %dspellgood %s"):format(index or 1, word)) then added[#added + 1] = word end
+  end
+  return added
+end
+
+function M.remove(text, index)
+  local removed = {}
+  for word in text:gmatch("[^%s|\"]+") do
+    pcall(vim.cmd, ("silent %dspellundo %s"):format(index or 1, word))
+    if M.is_bad(word) then removed[#removed + 1] = word end
+  end
+  return removed
+end
+
 function M.apply(buf, langs)
   vim.bo[buf].spelllang = table.concat(langs, ",")
 end
