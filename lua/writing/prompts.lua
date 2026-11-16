@@ -42,12 +42,19 @@ local PLANS_SCHEMA = {
 local INSTRUCTIONS = {
   synonyms = function(n)
     return ("Give %d alternatives for the target word that can replace it directly in the sentence "
-      .. "(same part of speech, same inflection). Single words or very short phrases, no explanations."):format(n)
+      .. "(same part of speech, same inflection). Single words or very short phrases, no explanations. "
+      .. "Never include the target word itself."):format(n)
   end,
   variations = function(n)
     return ("Give %d rewrites of the target sentence. Keep its meaning but vary the structure, not just the wording. "
       .. "If a previous sentence is given and the target feels disconnected from it, at least one rewrite may link "
       .. "the two. Each rewrite is one complete sentence with its end punctuation, ready to replace the original."):format(n)
+  end,
+  selection = function(n)
+    return ("Give %d replacements for the fragment. Each replacement is a phrase of similar length that takes the "
+      .. "fragment's place inside the sentence, so the sentence stays grammatical and keeps its meaning. Return ONLY "
+      .. "the replacement phrases, never the whole sentence. Example: sentence 'She walked quickly to the old "
+      .. "station.', fragment 'walked quickly' gives items ['hurried', 'strolled briskly', 'made her way']."):format(n)
   end,
   make_sense = function(n)
     return ("The paragraph holds loose thoughts. Produce exactly %d plans. Plan 1 keeps one thread and rewrites the "
@@ -64,12 +71,20 @@ end
 
 function M.build(ctx, opts)
   opts = opts or {}
-  local counts = opts.counts or { synonyms = 4, variations = 3, make_sense = 2 }
+  local counts = opts.counts or { synonyms = 4, variations = 3, make_sense = 2, selection = 3 }
   local kind = ctx.kind
   local language = lang.detect(sample_text(ctx))
 
-  local system = { BASE, LANG_RULE[language], INSTRUCTIONS[kind](counts[kind]) }
+  local ask = kind == "make_sense" and counts[kind] or counts[kind] + 1
+  local system = { BASE, LANG_RULE[language], INSTRUCTIONS[kind](ask) }
+  if ctx.misspelled then
+    system[#system + 1] = "The target word is misspelled. Infer the word the writer meant from the sentence and "
+      .. "give alternatives for that intended word, spelled correctly."
+  end
   if opts.tweak and TWEAK[opts.tweak] then system[#system + 1] = TWEAK[opts.tweak] end
+  if opts.avoid and #opts.avoid > 0 then
+    system[#system + 1] = "Already suggested, do not repeat or paraphrase these:\n- " .. table.concat(opts.avoid, "\n- ")
+  end
   if opts.style and opts.style ~= "" then
     system[#system + 1] = "Writer's style note (follow it):\n" .. opts.style
   end
@@ -77,6 +92,9 @@ function M.build(ctx, opts)
   local user
   if kind == "synonyms" then
     user = ("Target word: %s\nSentence: %s"):format(ctx.target, ctx.sentence)
+  elseif kind == "selection" then
+    user = ("Sentence: %s\nFragment to replace: %s"):format(ctx.sentence, ctx.target)
+    if ctx.previous then user = user .. "\nPrevious sentence: " .. ctx.previous end
   elseif kind == "variations" then
     user = ("Target sentence: %s"):format(ctx.target)
     if ctx.previous then user = user .. "\nPrevious sentence: " .. ctx.previous end
@@ -94,6 +112,9 @@ function M.build(ctx, opts)
     system = table.concat(system, "\n\n"),
     user = user,
     schema = kind == "make_sense" and PLANS_SCHEMA or ITEMS_SCHEMA,
+    temperature = opts.temperature,
+    format_hint = kind == "make_sense" and '{"plans":[{"title":"...","text":"..."}],"off_topic":["..."]}'
+      or '{"items":["...","..."]}',
   }
 end
 

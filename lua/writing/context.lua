@@ -67,9 +67,7 @@ local function previous_sentence(lines, row, sents, idx)
 end
 
 local function ends_with_terminator(text)
-  local trimmed = text:gsub("%s+$", "")
-  local last = trimmed:sub(-1)
-  return TERMINATORS[last] or trimmed:sub(-3) == "…"
+  return TERMINATORS[text:sub(-1)] or text:sub(-3) == "…"
 end
 
 function M.analyze(lines, row, col, insert, spell_bad)
@@ -80,7 +78,7 @@ function M.analyze(lines, row, col, insert, spell_bad)
 
   if not word_here and before:match("%S") and ends_with_terminator(before) then
     local sents = M.sentences(line)
-    local idx = sentence_index(sents, #before:gsub("%s+$", ""))
+    local idx = sentence_index(sents, #before)
     if idx and sents[idx].terminated then
       local s = sents[idx]
       return {
@@ -124,6 +122,29 @@ function M.analyze(lines, row, col, insert, spell_bad)
   end
 
   return nil
+end
+
+function M.selection(lines, row, scol, ecol, min_words)
+  local line = lines[row] or ""
+  local lead = line:sub(scol + 1, ecol):match("^%s*")
+  local trail = line:sub(scol + 1, ecol):match("%s*$")
+  scol = scol + #lead
+  ecol = ecol - #trail
+  if ecol <= scol then return nil end
+  local text = line:sub(scol + 1, ecol)
+  local words = select(2, text:gsub("[%w\128-\255]+", ""))
+  if words < (min_words or 1) or #text > 400 then return nil end
+  local sents = M.sentences(line)
+  local idx = sentence_index(sents, scol + 1)
+  return {
+    kind = "selection",
+    row = row,
+    scol = scol,
+    ecol = ecol,
+    target = text,
+    sentence = idx and sents[idx].text or line,
+    previous = idx and previous_sentence(lines, row, sents, idx) or nil,
+  }
 end
 
 function M.paragraph(lines, row, first, last)

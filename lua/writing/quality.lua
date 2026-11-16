@@ -26,13 +26,17 @@ local function overlap(a, b)
   return shared / math.min(na, nb)
 end
 
-function M.filter(ctx, items)
+function M.filter(ctx, items, exclude)
   local out, seen = {}, { [normalize(ctx.target)] = true }
+  for _, text in ipairs(exclude or {}) do seen[normalize(text)] = true end
   for _, item in ipairs(items) do
     local key = normalize(item.text)
     local keep = not seen[key]
     seen[key] = true
-    if keep and ctx.kind == "variations" then
+    if keep and ctx.kind == "selection" then
+      local ratio = #item.text / math.max(#ctx.target, 1)
+      keep = ratio >= 0.25 and ratio <= 4
+    elseif keep and ctx.kind == "variations" then
       local ratio = #item.text / math.max(#ctx.target, 1)
       keep = ratio >= 0.35 and ratio <= 3 and overlap(ctx.target, item.text) >= 0.15
     elseif keep and ctx.kind == "synonyms" then

@@ -2,8 +2,10 @@ local M = {}
 
 local ns = vim.api.nvim_create_namespace("writing_box")
 local ghost_ns = vim.api.nvim_create_namespace("writing_ghost")
+local target_ns = vim.api.nvim_create_namespace("writing_target")
+local HIGHLIGHTED = { synonyms = true, spelling = true, variations = true }
 
-local TITLES = { spelling = "Spelling", synonyms = "Synonyms", variations = "Variations", make_sense = "Make sense" }
+local TITLES = { selection = "Selection", spelling = "Spelling", synonyms = "Synonyms", variations = "Variations", make_sense = "Make sense" }
 local KEY_LABELS = { ["<CR>"] = "⏎", ["<Esc>"] = "esc", ["<Tab>"] = "⇥", ["<S-Tab>"] = "⇧⇥" }
 
 local state = { win = nil, buf = nil, target_buf = nil }
@@ -19,14 +21,19 @@ function M.setup_highlights(spell_highlight)
   hl("WritingBoxDim", "Comment")
   hl("WritingBoxFlag", "WarningMsg")
   hl("WritingGhost", "Comment")
+  hl("WritingTarget", "Visual")
   hl("WritingGhostNew", "DiffAdd")
   hl("WritingDiffOld", "DiffDelete")
   hl("WritingDiffNew", "DiffAdd")
+  hl("WritingBadgeEditor", "DiffAdd")
+  hl("WritingBadgeBurst", "DiffChange")
 end
 
 local function label(key)
   local alt = key:match("^<[AM]%-(.+)>$")
   if alt then return "⌥" .. (KEY_LABELS["<" .. alt .. ">"] or alt) end
+  local ctrl = key:match("^<C%-(.+)>$")
+  if ctrl then return "⌃" .. ctrl end
   return KEY_LABELS[key] or key
 end
 
@@ -65,10 +72,10 @@ local function footer(view, keys)
   else
     parts[#parts + 1] = label(keys.accept) .. " accept"
   end
-  if view.kind == "variations" then
+  if view.kind == "variations" or view.kind == "selection" then
     parts[#parts + 1] = label(keys.tighter) .. label(keys.clearer):gsub("^⌥", "") .. label(keys.formal):gsub("^⌥", "") .. " tweak"
   end
-  if view.kind ~= "spelling" then parts[#parts + 1] = label(keys.regenerate) .. " redo" end
+  if view.kind ~= "spelling" then parts[#parts + 1] = label(keys.regenerate) .. " more" end
   parts[#parts + 1] = label(keys.ignore) .. " ignore"
   return table.concat(parts, " · ")
 end
@@ -119,15 +126,26 @@ function M.build_lines(view, keys, width)
   return lines, marks
 end
 
-local function ensure_window(width, height, position)
+local badge = { win = nil, buf = nil }
+
+local function badge_open()
+  return badge.win ~= nil and vim.api.nvim_win_is_valid(badge.win)
+end
+
+local function corner(position, offset)
   local bottom = position ~= "top_right"
+  local base = bottom and (vim.o.lines - vim.o.cmdheight - (vim.o.laststatus > 0 and 1 or 0)) or 1
+  return bottom and "SE" or "NE", bottom and base - offset or base + offset
+end
+
+local function ensure_window(width, height, position)
   if not (state.buf and vim.api.nvim_buf_is_valid(state.buf)) then
     state.buf = vim.api.nvim_create_buf(false, true)
     vim.bo[state.buf].bufhidden = "wipe"
   end
+  local anchor, row = corner(position, badge_open() and 1 or 0)
   local config = {
-    relative = "editor", anchor = bottom and "SE" or "NE", col = vim.o.columns,
-    row = bottom and (vim.o.lines - vim.o.cmdheight - (vim.o.laststatus > 0 and 1 or 0)) or 1,
+    relative = "editor", anchor = anchor, col = vim.o.columns, row = row,
     width = width, height = height,
     style = "minimal", border = "rounded", focusable = false, zindex = 60, noautocmd = true,
   }
@@ -148,7 +166,17 @@ function M.close()
   state.buf = nil
   if state.target_buf and vim.api.nvim_buf_is_valid(state.target_buf) then
     vim.api.nvim_buf_clear_namespace(state.target_buf, ghost_ns, 0, -1)
+    vim.api.nvim_buf_clear_namespace(state.target_buf, target_ns, 0, -1)
   end
+end
+
+local function render_target(buf, view)
+  vim.api.nvim_buf_clear_namespace(buf, target_ns, 0, -1)
+  local ctx = view.ctx
+  if not (ctx and HIGHLIGHTED[view.kind]) then return end
+  vim.api.nvim_buf_set_extmark(buf, target_ns, ctx.row - 1, ctx.scol, {
+    end_row = ctx.row - 1, end_col = ctx.ecol, hl_group = "WritingTarget", priority = 150,
+  })
 end
 
 local function render_ghost(buf, view)
@@ -195,11 +223,43 @@ function M.render(view, keys, buf, position)
   for _, m in ipairs(marks) do
     vim.api.nvim_buf_set_extmark(state.buf, ns, m.row, 0, { line_hl_group = m.group })
   end
+  render_target(buf, view)
   if view.status == "ready" or (view.status == "loading" and view.items) then
     render_ghost(buf, view)
   else
     vim.api.nvim_buf_clear_namespace(buf, ghost_ns, 0, -1)
   end
+end
+
+function M.badge(text, position, group)
+  if not (badge.buf and vim.api.nvim_buf_is_valid(badge.buf)) then
+    badge.buf = vim.api.nvim_create_buf(false, true)
+    vim.bo[badge.buf].bufhidden = "wipe"
+  end
+  vim.api.nvim_buf_set_lines(badge.buf, 0, -1, false, { " " .. text .. " " })
+  local anchor, row = corner(position, 0)
+  local config = {
+    relative = "editor", anchor = anchor, col = vim.o.columns, row = row,
+    width = vim.fn.strdisplaywidth(text) + 2, height = 1,
+    style = "minimal", focusable = false, zindex = 40, noautocmd = true,
+  }
+  if badge_open() then
+    vim.api.nvim_win_set_config(badge.win, config)
+  else
+    badge.win = vim.api.nvim_open_win(badge.buf, false, config)
+  end
+  badge.text = text
+  vim.wo[badge.win].winhighlight = "NormalFloat:" .. group
+end
+
+function M.hide_badge()
+  if badge_open() then pcall(vim.api.nvim_win_close, badge.win, true) end
+  badge.win = nil
+  badge.text = nil
+end
+
+function M.badge_text()
+  return badge_open() and badge.text or nil
 end
 
 function M.window()

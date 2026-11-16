@@ -61,6 +61,14 @@ return {
     end,
   },
   {
+    name = "a space after the period means a new sentence, so no variations",
+    fn = function()
+      local line = "I wrote this. "
+      eq(context.analyze({ line }, 1, #line, true), nil)
+      eq(context.analyze({ line }, 1, #line - 1, false), nil)
+    end,
+  },
+  {
     name = "insert mode mid-word gives nothing",
     fn = function()
       eq(context.analyze({ "I wrote thi" }, 1, 11, true), nil)
@@ -111,6 +119,28 @@ return {
       eq(c.scol, 7)
       eq(c.ecol, 10)
       eq(context.analyze({ "I like teh" }, 1, 10, true, bad), nil)
+    end,
+  },
+  {
+    name = "selection of several words becomes a selection context with sentence",
+    fn = function()
+      local lines = { "Intro. She walked quickly to the old station today." }
+      local c = context.selection(lines, 1, 18, 36, 2)
+      eq(c.kind, "selection")
+      eq(c.target, "quickly to the old")
+      eq(c.sentence, "She walked quickly to the old station today.")
+      eq(c.previous, "Intro.")
+    end,
+  },
+  {
+    name = "selection trims whitespace and needs enough words",
+    fn = function()
+      local lines = { "She walked quickly home." }
+      local c = context.selection(lines, 1, 3, 18, 2)
+      eq(c.target, "walked quickly")
+      eq(c.scol, 4)
+      eq(context.selection(lines, 1, 4, 10, 2), nil)
+      eq(context.selection(lines, 1, 4, 10, 1).target, "walked")
     end,
   },
 }

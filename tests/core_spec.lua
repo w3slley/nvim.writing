@@ -232,6 +232,10 @@ return {
       h.core:regenerate("tighter")
       eq(#h.calls, 2)
       eq(h.calls[2].req.system:find("tighter", 1, true) ~= nil, true)
+      eq(h.calls[2].req.system:find("On the mat the cat sat.", 1, true) ~= nil, true)
+      reply(h.calls[2], { "On the mat the cat sat.", "The cat sat upon the mat." })
+      eq(#h.core.view.items, 1)
+      eq(h.core.view.items[1].text, "The cat sat upon the mat.")
     end,
   },
   {
@@ -244,6 +248,45 @@ return {
       h.core:on_event({ tick = 2, row = 1, col = 2, insert = false, context = word_ctx("sunny") })
       h.advance(800)
       eq(#h.calls, 1)
+    end,
+  },
+  {
+    name = "ignoring an error view still remembers the target",
+    fn = function()
+      local h = harness()
+      local ctx = word_ctx("lovely")
+      h.core:on_event({ tick = 1, row = 1, col = 2, insert = false, context = ctx })
+      h.advance(800)
+      h.calls[1].cb("boom")
+      h.calls[2].cb("boom")
+      eq(h.core.view.status, "error")
+      h.core:ignore()
+      h.core:on_event({ tick = 1, row = 1, col = 3, insert = false, context = ctx })
+      h.advance(2000)
+      eq(#h.calls, 2)
+      eq(h.core.view.status, "idle")
+    end,
+  },
+  {
+    name = "a misspelled word at rest is requested as synonyms flagged misspelled",
+    fn = function()
+      local h = harness()
+      local ctx = { kind = "spelling", row = 1, scol = 0, ecol = 3, target = "teh", sentence = "teh cat" }
+      h.core:on_event({ tick = 1, row = 1, col = 1, insert = false, context = ctx })
+      h.advance(800)
+      eq(#h.calls, 1)
+      eq(h.calls[1].req.kind, "synonyms")
+      eq(h.calls[1].req.system:find("misspelled", 1, true) ~= nil, true)
+    end,
+  },
+  {
+    name = "a misspelled word right after typing it stays quiet unless ambient spelling is on",
+    fn = function()
+      local h = harness()
+      local ctx = { kind = "spelling", row = 1, scol = 0, ecol = 3, target = "teh", sentence = "teh " }
+      h.core:on_event({ tick = 1, row = 1, col = 4, insert = true, context = ctx })
+      h.advance(2000)
+      eq(#h.calls, 0)
     end,
   },
 }

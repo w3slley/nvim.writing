@@ -6,33 +6,33 @@ function M.new(cfg)
   local self = {}
 
   function self.request(req, cb)
-    local key = vim.env[cfg.api_key_env or ""]
-    if not key or key == "" then
+    local key = cfg.api_key_env and vim.env[cfg.api_key_env] or nil
+    if cfg.api_key_env and (not key or key == "") then
       vim.schedule(function() cb("missing " .. tostring(cfg.api_key_env)) end)
       return function() end
     end
 
     local started = vim.uv.hrtime()
     local cancelled = false
-    local body = vim.json.encode({
+    local body = vim.json.encode(vim.tbl_extend("force", {
       model = cfg.model,
-      temperature = cfg.temperature or 0.7,
+      temperature = req.temperature or cfg.temperature or 0.7,
       response_format = { type = "json_object" },
       messages = {
-        { role = "system", content = req.system .. "\n\nJSON schema:\n" .. vim.json.encode(req.schema) },
+        { role = "system", content = req.system .. "\n\nReply with JSON only, in this shape: " .. req.format_hint },
         { role = "user", content = req.user },
       },
-    })
+    }, cfg.extra or {}))
 
     local args = {
       "curl", "-sS", "--keepalive-time", "60",
       "-m", tostring(math.floor((cfg.timeout or 20000) / 1000)),
-      "-H", "Authorization: Bearer " .. key,
       "-H", "Content-Type: application/json",
       "-w", "\n%{time_starttransfer}",
       "-d", "@-",
       cfg.url,
     }
+    if key then vim.list_extend(args, { "-H", "Authorization: Bearer " .. key }) end
 
     local function finish(err, tbl, meta)
       vim.schedule(function()

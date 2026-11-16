@@ -65,7 +65,8 @@ function Core:on_event(snap)
     return
   end
   self.quiet = nil
-  if last and last.tick == snap.tick and last.row == snap.row and last.col == snap.col and last.insert == snap.insert then
+  if last and last.tick == snap.tick and last.row == snap.row and last.col == snap.col and last.insert == snap.insert
+    and last.anchor == snap.anchor then
     return
   end
   self.snap = snap
@@ -75,10 +76,17 @@ function Core:on_event(snap)
   if self.hidden or self.manual_only then return end
   local ctx = snap.context
   if not ctx or ctx.kind == "make_sense" then return end
-  if ctx.kind == "spelling" and not self.config.spell.ambient then return end
+  if ctx.kind == "spelling" and not self.config.spell.ambient then
+    if snap.insert then return end
+    ctx = vim.tbl_extend("force", ctx, { kind = "synonyms", misspelled = true })
+  end
   if self.ignored[ignore_key(ctx, snap.tick)] then return end
 
-  local delay = ({ synonyms = self.config.delays.word, spelling = self.config.delays.spell })[ctx.kind]
+  local delay = ({
+    synonyms = self.config.delays.word,
+    spelling = self.config.delays.spell,
+    selection = self.config.delays.selection,
+  })[ctx.kind]
     or self.config.delays.sentence
   local id = self.req_id
   self.cancel_timer = self.timer.start(delay, function()
@@ -116,7 +124,7 @@ function Core:fire(ctx, opts)
 
   self:cancel_pending()
   local id = self.req_id
-  self.current = { ctx = ctx, opts = opts }
+  self.current = { ctx = ctx, opts = opts, shown = opts.shown or {} }
 
   if ctx.kind == "spelling" then
     local items = {}
@@ -158,7 +166,10 @@ function Core:fire(ctx, opts)
     index = previous and previous.index or 1, tick = opts.tick,
   })
 
-  local req = prompts.build(ctx, { counts = self.config.counts, style = style, tweak = opts.tweak })
+  local req = prompts.build(ctx, {
+    counts = self.config.counts, style = style, tweak = opts.tweak, avoid = opts.shown,
+    temperature = opts.shown and #opts.shown > 0 and 0.95 or nil,
+  })
 
   local function send(tier, retried)
     local provider = self.providers[tier]
@@ -180,15 +191,21 @@ function Core:fire(ctx, opts)
         self:set_view({ status = "error", kind = ctx.kind, ctx = ctx, target = ctx.target, message = tostring(err) })
         return
       end
-      local items = quality.filter(ctx, parsed.items)
+      local items = quality.filter(ctx, parsed.items, opts.shown)
+      local limit = self.config.counts[ctx.kind]
+      while limit and #items > limit do table.remove(items) end
       if #items == 0 then
         if opts.manual then
-          self:set_view({ status = "error", kind = ctx.kind, ctx = ctx, target = ctx.target, message = "no usable suggestions" })
+          self:set_view({
+            status = "error", kind = ctx.kind, ctx = ctx, target = ctx.target,
+            message = (opts.shown and #opts.shown > 0) and "no new suggestions" or "no usable suggestions",
+          })
         else
           self:clear()
         end
         return
       end
+      for _, item in ipairs(items) do table.insert(self.current.shown, item.text) end
       self:remember(cache_key, { items = items, flags = parsed.flags })
       self:set_view({
         status = "ready", kind = ctx.kind, ctx = ctx, target = ctx.target,
@@ -235,7 +252,9 @@ end
 function Core:ignore()
   local v = self.view
   if not self:visible() then return false end
-  if v.ctx and v.tick then self.ignored[ignore_key(v.ctx, v.tick)] = true end
+  local ctx = v.ctx or (self.current and self.current.ctx)
+  local tick = v.tick or (self.current and self.current.opts.tick)
+  if ctx and tick then self.ignored[ignore_key(ctx, tick)] = true end
   self.log({ event = "ignore", kind = v.kind })
   self:cancel_pending()
   self:set_view({ status = "idle" })
@@ -246,16 +265,22 @@ function Core:regenerate(tweak)
   local cur = self.current
   if not cur or self.view.status == "idle" then return false end
   self.log({ event = "regenerate", kind = cur.ctx.kind, tweak = tweak })
-  self:fire(cur.ctx, vim.tbl_extend("force", cur.opts, { tweak = tweak or cur.opts.tweak, fresh = true, manual = true }))
+  self:fire(cur.ctx, vim.tbl_extend("force", cur.opts, {
+    tweak = tweak or cur.opts.tweak, fresh = true, manual = true, shown = cur.shown,
+  }))
   return true
 end
 
-function Core:toggle()
-  self.hidden = not self.hidden
-  if self.hidden then
+function Core:set_hidden(hidden)
+  self.hidden = hidden
+  if hidden then
     self:cancel_pending()
     self:set_view({ status = "idle" })
   end
+end
+
+function Core:toggle()
+  self:set_hidden(not self.hidden)
 end
 
 function Core:toggle_manual()
