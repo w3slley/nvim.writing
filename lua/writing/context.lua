@@ -72,7 +72,7 @@ local function ends_with_terminator(text)
   return TERMINATORS[last] or trimmed:sub(-3) == "…"
 end
 
-function M.analyze(lines, row, col, insert)
+function M.analyze(lines, row, col, insert, spell_bad)
   local line = lines[row] or ""
   local before = insert and line:sub(1, col) or line:sub(1, col + 1)
   local under = (not insert) and line:sub(col + 1, col + 1) or ""
@@ -95,13 +95,24 @@ function M.analyze(lines, row, col, insert)
     end
   end
 
+  if insert and spell_bad then
+    local head = before:match("^(.-)%s+$")
+    local w = head and M.word_at(line, #head - 1)
+    if w and w.e == #head and #w.text >= 3 and spell_bad(w.text) then
+      return {
+        kind = "spelling", row = row, scol = w.s - 1, ecol = w.e, target = w.text, sentence = line,
+      }
+    end
+  end
+
   if word_here then
     local w = M.word_at(line, col)
     if w and #w.text >= 3 then
       local sents = M.sentences(line)
       local idx = sentence_index(sents, w.s)
+      local misspelled = spell_bad and spell_bad(w.text)
       return {
-        kind = "synonyms",
+        kind = misspelled and "spelling" or "synonyms",
         row = row,
         scol = w.s - 1,
         ecol = w.e,

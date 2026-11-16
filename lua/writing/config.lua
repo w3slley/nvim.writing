@@ -2,7 +2,8 @@ local M = {}
 
 M.defaults = {
   filetypes = { "markdown", "text" },
-  delays = { word = 700, sentence = 600 },
+  delays = { word = 700, sentence = 600, spell = 250 },
+  spell = { enabled = true, langs = { "en", "pt" }, suggestions = 4, highlight = true, ambient = false },
   max_requests_per_minute = 30,
   style_file = ".writing-style.md",
   disable_file = ".writing-off",
@@ -17,15 +18,16 @@ M.defaults = {
     make_sense = "<leader>wp",
     toggle = "<leader>wt",
     manual = "<leader>wm",
-    next = "j",
-    prev = "k",
-    accept = "<CR>",
+    next = "<S-Tab>",
+    prev = "<A-k>",
+    accept = "<Tab>",
     ignore = "<Esc>",
-    regenerate = "r",
-    tighter = "t",
-    clearer = "c",
-    formal = "f",
+    regenerate = "<A-r>",
+    tighter = "<A-t>",
+    clearer = "<A-c>",
+    formal = "<A-f>",
   },
+  box = { position = "bottom_right" },
 }
 
 function M.resolve(user)

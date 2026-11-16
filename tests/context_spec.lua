@@ -91,4 +91,26 @@ return {
       eq(lang.detect("This is not a very good sentence."), "en")
     end,
   },
+  {
+    name = "misspelled word under cursor is spelling, not synonyms",
+    fn = function()
+      local bad = function(w) return w == "teh" end
+      local c = context.analyze({ "I like teh weather." }, 1, 8, false, bad)
+      eq(c.kind, "spelling")
+      eq(c.target, "teh")
+      eq(context.analyze({ "I like the weather." }, 1, 8, false, bad).kind, "synonyms")
+    end,
+  },
+  {
+    name = "insert mode right after a misspelled word and space gives spelling",
+    fn = function()
+      local bad = function(w) return w == "teh" end
+      local line = "I like teh "
+      local c = context.analyze({ line }, 1, #line, true, bad)
+      eq(c.kind, "spelling")
+      eq(c.scol, 7)
+      eq(c.ecol, 10)
+      eq(context.analyze({ "I like teh" }, 1, 10, true, bad), nil)
+    end,
+  },
 }

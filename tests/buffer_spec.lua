@@ -15,13 +15,14 @@ local function respond(req)
   }
 end
 
-local function fresh(lines)
+local function fresh(lines, spell_extra)
   vim.cmd("silent! %bwipeout!")
   package.loaded["writing"] = nil
   local writing = require("writing")
   writing.setup({
     log_file = vim.fn.tempname(),
-    delays = { word = 30, sentence = 30 },
+    delays = { word = 30, sentence = 30, spell = 30 },
+    spell = vim.tbl_extend("force", { langs = { "en" } }, spell_extra or {}),
     providers = {
       fast = { type = "fake", respond = respond, delay = 5 },
       strong = { type = "fake", respond = respond, delay = 5 },
@@ -83,13 +84,13 @@ return {
     name = "keys are mapped only while the box is visible",
     fn = function()
       local writing, buf = fresh({ "The weather is lovely today." })
-      eq(vim.fn.maparg("j", "n", false, true).buffer, nil)
+      eq(vim.fn.maparg("<S-Tab>", "n", false, true).buffer, nil)
       vim.api.nvim_win_set_cursor(0, { 1, 16 })
       event(buf)
       local core = wait_ready(writing)
-      eq(vim.fn.maparg("j", "n", false, true).buffer, 1)
+      eq(vim.fn.maparg("<S-Tab>", "n", false, true).buffer, 1)
       core:ignore()
-      eq(vim.fn.maparg("j", "n", false, true).buffer, nil)
+      eq(vim.fn.maparg("<S-Tab>", "n", false, true).buffer, nil)
     end,
   },
   {
@@ -131,6 +132,36 @@ return {
       vim.api.nvim_exec_autocmds("TextChanged", { buffer = buf })
       eq(core.view.status, "idle")
       eq(require("writing.box").window(), nil)
+    end,
+  },
+  {
+    name = "misspelled words are underlined and spelling suggestions are on demand only",
+    fn = function()
+      local writing, buf = fresh({ "I like teh weather." })
+      eq(vim.wo.spell, true)
+      vim.api.nvim_win_set_cursor(0, { 1, 8 })
+      event(buf)
+      vim.wait(200, function() return false end, 10)
+      local core = writing._core()
+      eq(core.view.status, "idle")
+      writing.suggest_now()
+      core = wait_ready(writing)
+      eq(core.view.kind, "spelling")
+      eq(core.view.items[1].text, "the")
+      core:accept()
+      eq(vim.api.nvim_buf_get_lines(buf, 0, -1, false), { "I like the weather." })
+    end,
+  },
+  {
+    name = "ambient spelling fires on a misspelled word when enabled",
+    fn = function()
+      local writing, buf = fresh({ "I like teh weather." }, { ambient = true })
+      vim.api.nvim_win_set_cursor(0, { 1, 8 })
+      event(buf)
+      local core = wait_ready(writing)
+      eq(core.view.kind, "spelling")
+      core:accept()
+      eq(vim.api.nvim_buf_get_lines(buf, 0, -1, false), { "I like the weather." })
     end,
   },
 }

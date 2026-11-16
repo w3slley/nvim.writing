@@ -16,6 +16,7 @@ function Core.new(opts)
   self.apply = opts.apply or function() end
   self.log = opts.log or function() end
   self.style = opts.style or function() return nil end
+  self.spell = opts.spell or function() return {} end
   self.req_id = 0
   self.hidden = false
   self.manual_only = false
@@ -74,9 +75,11 @@ function Core:on_event(snap)
   if self.hidden or self.manual_only then return end
   local ctx = snap.context
   if not ctx or ctx.kind == "make_sense" then return end
+  if ctx.kind == "spelling" and not self.config.spell.ambient then return end
   if self.ignored[ignore_key(ctx, snap.tick)] then return end
 
-  local delay = ctx.kind == "synonyms" and self.config.delays.word or self.config.delays.sentence
+  local delay = ({ synonyms = self.config.delays.word, spelling = self.config.delays.spell })[ctx.kind]
+    or self.config.delays.sentence
   local id = self.req_id
   self.cancel_timer = self.timer.start(delay, function()
     self.cancel_timer = nil
@@ -114,6 +117,25 @@ function Core:fire(ctx, opts)
   self:cancel_pending()
   local id = self.req_id
   self.current = { ctx = ctx, opts = opts }
+
+  if ctx.kind == "spelling" then
+    local items = {}
+    for _, w in ipairs(self.spell(ctx)) do items[#items + 1] = { text = w } end
+    items = quality.filter(ctx, items)
+    if #items == 0 then
+      if opts.manual then
+        self:set_view({ status = "error", kind = ctx.kind, ctx = ctx, target = ctx.target, message = "no spelling suggestions" })
+      else
+        self:clear()
+      end
+      return
+    end
+    self:set_view({
+      status = "ready", kind = ctx.kind, ctx = ctx, target = ctx.target,
+      items = items, flags = {}, index = 1, tick = opts.tick,
+    })
+    return
+  end
 
   local cached = not opts.fresh and self.cache[cache_key]
   if cached then
@@ -192,14 +214,6 @@ function Core:move(delta)
   v.index = ((v.index - 1 + delta) % n) + 1
   v.confirmed = false
   self:set_view(v)
-end
-
-function Core:pick(n)
-  local v = self.view
-  if v.status ~= "ready" or v.kind ~= "synonyms" or not v.items[n] then return false end
-  v.index = n
-  self:set_view(v)
-  return self:accept()
 end
 
 function Core:accept()

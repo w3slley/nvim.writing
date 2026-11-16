@@ -13,6 +13,8 @@ local group
 local active_buf
 local mapped = {}
 local style_cache = {}
+local spell_ready = false
+local spell = require("writing.spell")
 
 local function real_timer()
   return {
@@ -66,7 +68,7 @@ local function snapshot(buf)
   if insert or mode == "n" then
     local start = math.max(1, row - 1)
     local lines = vim.api.nvim_buf_get_lines(buf, start - 1, row, false)
-    local ctx = context.analyze(lines, row - start + 1, col, insert)
+    local ctx = context.analyze(lines, row - start + 1, col, insert, spell_ready and spell.is_bad or nil)
     if ctx then ctx.row = row end
     snap.context = ctx
   end
@@ -77,6 +79,7 @@ local function apply_edit(edit)
   local buf = active_buf
   local ctx = edit.ctx
   local win = vim.api.nvim_get_current_win()
+  local before = vim.api.nvim_win_get_cursor(win)
   vim.cmd("let &undolevels = &undolevels")
   local row, col
   if ctx.kind == "make_sense" then
@@ -89,6 +92,7 @@ local function apply_edit(edit)
     vim.api.nvim_buf_set_text(buf, ctx.row - 1, ctx.scol, ctx.row - 1, ctx.ecol, { text })
     row = ctx.row
     col = ctx.scol + #text
+    if before[1] == row and before[2] >= ctx.ecol then col = before[2] + #text - (ctx.ecol - ctx.scol) end
   end
   vim.api.nvim_win_set_cursor(win, { row, col })
   local pos = vim.api.nvim_win_get_cursor(win)
@@ -97,7 +101,7 @@ end
 
 local function unmap_keys()
   for _, m in ipairs(mapped) do
-    pcall(vim.keymap.del, "n", m.lhs, { buffer = m.buf })
+    pcall(vim.keymap.del, { "n", "i" }, m.lhs, { buffer = m.buf })
   end
   mapped = {}
 end
@@ -105,7 +109,7 @@ end
 local function map_keys(buf)
   if #mapped > 0 then return end
   local function map(lhs, fn)
-    vim.keymap.set("n", lhs, fn, { buffer = buf, nowait = true, silent = true })
+    vim.keymap.set({ "n", "i" }, lhs, fn, { buffer = buf, nowait = true, silent = true })
     mapped[#mapped + 1] = { lhs = lhs, buf = buf }
   end
   local k = cfg.keys
@@ -117,9 +121,6 @@ local function map_keys(buf)
   map(k.tighter, function() core:regenerate("tighter") end)
   map(k.clearer, function() core:regenerate("clearer") end)
   map(k.formal, function() core:regenerate("formal") end)
-  for n = 1, 4 do
-    map(tostring(n), function() core:pick(n) end)
-  end
 end
 
 local function on_change(view)
@@ -129,7 +130,7 @@ local function on_change(view)
     unmap_keys()
     return
   end
-  box.render(view, cfg.keys, buf)
+  box.render(view, cfg.keys, buf, cfg.box.position)
   if core:visible() then
     map_keys(buf)
   else
@@ -162,7 +163,7 @@ function M.suggest_now()
   active_buf = buf
   local snap = snapshot(buf)
   local ctx = snap.context
-  if not ctx or (ctx.kind == "synonyms" and core.view.kind == "synonyms" and core.view.status ~= "idle") then
+  if not ctx or ((ctx.kind == "synonyms" or ctx.kind == "spelling") and core.view.kind == ctx.kind and core.view.status ~= "idle") then
     ctx = sentence_context_at(buf)
   end
   if not ctx then
@@ -204,11 +205,20 @@ function M.toggle_manual()
   vim.notify("writing: " .. (manual and "manual only" or "ambient suggestions on"))
 end
 
+local function show_spell(buf)
+  if not (spell_ready and cfg.spell.highlight) then return end
+  vim.bo[buf].spellcapcheck = ""
+  for _, win in ipairs(vim.fn.win_findbuf(buf)) do vim.wo[win].spell = true end
+end
+
 function M.attach(buf)
   buf = buf or vim.api.nvim_get_current_buf()
   if vim.b[buf].writing_attached then return end
   if project_disabled(buf) then return end
   vim.b[buf].writing_attached = true
+  if spell_ready then spell.apply(buf, cfg.spell.langs) end
+  show_spell(buf)
+  vim.api.nvim_create_autocmd("BufWinEnter", { group = group, buffer = buf, callback = function() show_spell(buf) end })
 
   local function handle()
     if vim.api.nvim_get_current_buf() ~= buf then return end
@@ -236,10 +246,28 @@ function M.attach(buf)
   bmap("n", k.manual, M.toggle_manual, "manual only")
 end
 
+local function refresh_spell()
+  local missing = spell.missing(cfg.spell.langs)
+  spell_ready = cfg.spell.enabled and #missing == 0
+  if cfg.spell.enabled and #missing > 0 then
+    vim.schedule(function()
+      vim.notify("writing: spelling mode off, missing spell files for: " .. table.concat(missing, ", ") .. " (run :WritingSpellInstall)", vim.log.levels.WARN)
+    end)
+  end
+  if spell_ready then
+    for _, b in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.b[b].writing_attached then
+        spell.apply(b, cfg.spell.langs)
+        M._show_spell(b)
+      end
+    end
+  end
+end
+
 function M.setup(user)
   cfg = config_mod.resolve(user)
   log.setup(cfg.log_file)
-  box.setup_highlights()
+  box.setup_highlights(cfg.spell.highlight)
 
   local providers = {
     fast = provider.create(cfg.providers.fast),
@@ -255,8 +283,10 @@ function M.setup(user)
     apply = apply_edit,
     log = function(e) log.write(e) end,
     style = read_style,
+    spell = function(ctx) return spell.suggest(ctx.target, cfg.spell.suggestions) end,
   })
 
+  refresh_spell()
   group = vim.api.nvim_create_augroup("writing", { clear = true })
   vim.api.nvim_create_autocmd("FileType", {
     group = group,
@@ -269,6 +299,13 @@ function M.setup(user)
   vim.api.nvim_create_user_command("WritingSense", M.make_sense, { range = true })
   vim.api.nvim_create_user_command("WritingToggle", M.toggle, {})
   vim.api.nvim_create_user_command("WritingManual", M.toggle_manual, {})
+  vim.api.nvim_create_user_command("WritingSpellInstall", function()
+    vim.notify("writing: downloading spell files…")
+    spell.install(cfg.spell.langs, function(ok)
+      refresh_spell()
+      vim.notify(ok and "writing: spell files installed" or "writing: spell download failed", ok and vim.log.levels.INFO or vim.log.levels.ERROR)
+    end)
+  end, {})
   vim.api.nvim_create_user_command("WritingLog", function() vim.cmd.edit(cfg.log_file) end, {})
 
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
@@ -277,6 +314,8 @@ function M.setup(user)
     end
   end
 end
+
+function M._show_spell(buf) show_spell(buf) end
 
 function M._core()
   return core

@@ -207,17 +207,6 @@ return {
     end,
   },
   {
-    name = "pick chooses by number for synonyms only",
-    fn = function()
-      local h = harness()
-      h.core:on_event({ tick = 1, row = 1, col = 2, insert = false, context = word_ctx("lovely") })
-      h.advance(800)
-      reply(h.calls[1], { "nice", "pleasant", "fine" })
-      h.core:pick(3)
-      eq(h.applied[1].text, "fine")
-    end,
-  },
-  {
     name = "make sense needs a second accept to apply",
     fn = function()
       local h = harness()

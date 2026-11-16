@@ -2,3 +2,4 @@ vim.opt.runtimepath:prepend(vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(
 vim.g.mapleader = " "
 vim.cmd("filetype plugin on")
 require("writing").setup()
+vim.opt.swapfile = false

@@ -3,12 +3,15 @@ local M = {}
 local ns = vim.api.nvim_create_namespace("writing_box")
 local ghost_ns = vim.api.nvim_create_namespace("writing_ghost")
 
-local TITLES = { synonyms = "Synonyms", variations = "Variations", make_sense = "Make sense" }
-local KEY_LABELS = { ["<CR>"] = "⏎", ["<Esc>"] = "esc" }
+local TITLES = { spelling = "Spelling", synonyms = "Synonyms", variations = "Variations", make_sense = "Make sense" }
+local KEY_LABELS = { ["<CR>"] = "⏎", ["<Esc>"] = "esc", ["<Tab>"] = "⇥", ["<S-Tab>"] = "⇧⇥" }
 
 local state = { win = nil, buf = nil, target_buf = nil }
 
-function M.setup_highlights()
+function M.setup_highlights(spell_highlight)
+  if spell_highlight then
+    vim.api.nvim_set_hl(0, "SpellBad", { undercurl = true, sp = "#e06c75" })
+  end
   local function hl(name, link) vim.api.nvim_set_hl(0, name, { link = link, default = true }) end
   hl("WritingBox", "NormalFloat")
   hl("WritingBoxBorder", "FloatBorder")
@@ -22,6 +25,8 @@ function M.setup_highlights()
 end
 
 local function label(key)
+  local alt = key:match("^<[AM]%-(.+)>$")
+  if alt then return "⌥" .. (KEY_LABELS["<" .. alt .. ">"] or alt) end
   return KEY_LABELS[key] or key
 end
 
@@ -54,17 +59,16 @@ local function footer(view, keys)
   if view.status == "error" then return label(keys.ignore) .. " dismiss" end
   if view.status == "loading" and not view.items then return label(keys.ignore) .. " cancel" end
   local parts = {}
-  if view.kind == "synonyms" then parts[#parts + 1] = "1-4 pick" end
-  parts[#parts + 1] = keys.next .. "/" .. keys.prev .. " cycle"
+  parts[#parts + 1] = label(keys.next) .. " cycle"
   if view.kind == "make_sense" then
     parts[#parts + 1] = label(keys.accept) .. (view.confirmed and " apply" or " preview")
   else
     parts[#parts + 1] = label(keys.accept) .. " accept"
   end
   if view.kind == "variations" then
-    parts[#parts + 1] = keys.tighter .. keys.clearer .. keys.formal .. " tweak"
+    parts[#parts + 1] = label(keys.tighter) .. label(keys.clearer):gsub("^⌥", "") .. label(keys.formal):gsub("^⌥", "") .. " tweak"
   end
-  parts[#parts + 1] = keys.regenerate .. " redo"
+  if view.kind ~= "spelling" then parts[#parts + 1] = label(keys.regenerate) .. " redo" end
   parts[#parts + 1] = label(keys.ignore) .. " ignore"
   return table.concat(parts, " · ")
 end
@@ -108,18 +112,23 @@ function M.build_lines(view, keys, width)
     end
   end
 
-  lines[#lines + 1] = footer(view, keys)
-  marks[#marks + 1] = { row = #lines - 1, group = "WritingBoxDim" }
+  for _, chunk in ipairs(wrap(footer(view, keys), width)) do
+    lines[#lines + 1] = chunk
+    marks[#marks + 1] = { row = #lines - 1, group = "WritingBoxDim" }
+  end
   return lines, marks
 end
 
-local function ensure_window(width, height)
+local function ensure_window(width, height, position)
+  local bottom = position ~= "top_right"
   if not (state.buf and vim.api.nvim_buf_is_valid(state.buf)) then
     state.buf = vim.api.nvim_create_buf(false, true)
     vim.bo[state.buf].bufhidden = "wipe"
   end
   local config = {
-    relative = "editor", anchor = "NE", row = 1, col = vim.o.columns, width = width, height = height,
+    relative = "editor", anchor = bottom and "SE" or "NE", col = vim.o.columns,
+    row = bottom and (vim.o.lines - vim.o.cmdheight - (vim.o.laststatus > 0 and 1 or 0)) or 1,
+    width = width, height = height,
     style = "minimal", border = "rounded", focusable = false, zindex = 60, noautocmd = true,
   }
   if state.win and vim.api.nvim_win_is_valid(state.win) then
@@ -172,7 +181,7 @@ local function render_ghost(buf, view)
   })
 end
 
-function M.render(view, keys, buf)
+function M.render(view, keys, buf, position)
   if view.status == "idle" then
     M.close()
     return
@@ -180,7 +189,7 @@ function M.render(view, keys, buf)
   state.target_buf = buf
   local width = math.max(30, math.min(56, vim.o.columns - 6))
   local lines, marks = M.build_lines(view, keys, width)
-  ensure_window(width, #lines)
+  ensure_window(width, #lines, position)
   vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, lines)
   vim.api.nvim_buf_clear_namespace(state.buf, ns, 0, -1)
   for _, m in ipairs(marks) do
