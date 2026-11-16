@@ -10,7 +10,8 @@ for w in ([[the of and to in is are was were be been that this it for with as on
   EN[w] = true
 end
 
-function M.detect(text)
+-- `fallback` decides when the text has no clue either way, such as a single word.
+function M.detect(text, fallback)
   local pt, en = 0, 0
   local lower = text:lower()
   for w in lower:gmatch("[%a\128-\255]+") do
@@ -20,7 +21,8 @@ function M.detect(text)
   if lower:find("[ãõçáéíóúâêô]") then pt = pt + 2 end
   if lower:find("[a-z]nh[ao]") or lower:find("[a-z]lh[ao]") or lower:find("%a+mente%f[%A]") then pt = pt + 1 end
   if pt > en then return "pt" end
-  return "en"
+  if en > pt then return "en" end
+  return fallback or "en"
 end
 
 return M

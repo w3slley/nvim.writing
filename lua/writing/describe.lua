@@ -6,7 +6,13 @@ local M = {}
 -- freely and the dictionary then acts as the filter, which is what keeps invented words out.
 local SYSTEM = "You help a writer find the word they have in mind from a description. Give the %d single words "
   .. "that best match it, best first. Only real dictionary words, never invented ones, and never a word that is "
-  .. "already in the description. Reply only with JSON in this shape: {\"items\":[\"word\",\"word\"]}"
+  .. "already in the description.%s Reply only with JSON in this shape: {\"items\":[\"word\",\"word\"]}"
+
+local LANG_RULE = {
+  en = " The words must be English.",
+  pt = " The description is in Portuguese: the words must be European Portuguese (PT-PT), spelled with the new "
+    .. "orthography (Acordo Ortográfico), never Brazilian terms or spellings.",
+}
 
 local function query_words(query)
   local out = {}
@@ -34,8 +40,8 @@ function M.request(query, opts)
   return {
     kind = "describe",
     tier = "fast",
-    language = "en",
-    system = SYSTEM:format(opts.guesses or 8),
+    language = opts.lang or "en",
+    system = SYSTEM:format(opts.guesses or 8, LANG_RULE[opts.lang] or LANG_RULE.en),
     user = "Description: " .. query,
     format_hint = '{"items":["word","word"]}',
     schema = {
@@ -47,25 +53,35 @@ function M.request(query, opts)
   }
 end
 
-function M.merge(idx, query, candidates, reply, limit)
+-- `reserve` slots are kept for dictionary matches, so a model that fills the whole list cannot hide them.
+function M.merge(idx, query, candidates, reply, limit, reserve)
   local skip = query_words(query)
   local scores = dict.scores(idx, query)
-  local out, seen = {}, {}
-  local function add(item)
+  local seen = {}
+  local function fresh(item)
     local key = item.word:lower()
-    if seen[key] or skip[key] then return end
+    if seen[key] or skip[key] then return false end
     seen[key] = true
-    out[#out + 1] = item
+    return true
   end
+  local model, dictionary = {}, {}
   local guesses = type(reply) == "table" and type(reply.items) == "table" and reply.items or {}
   for _, w in ipairs(guesses) do
     if type(w) == "string" then
       local found = dict.lookup(idx, w, query, scores)
-      if found then add(vim.tbl_extend("force", found, { source = "model" })) end
+      if found and fresh(found) then model[#model + 1] = vim.tbl_extend("force", found, { source = "model" }) end
     end
   end
-  for _, c in ipairs(candidates) do add(c) end
-  while #out > limit do table.remove(out) end
+  for _, c in ipairs(candidates) do
+    if fresh(c) then dictionary[#dictionary + 1] = c end
+  end
+  local out = {}
+  local n_model = math.min(#model, limit - math.min(reserve or 3, #dictionary))
+  for i = 1, n_model do out[#out + 1] = model[i] end
+  for _, c in ipairs(dictionary) do
+    if #out >= limit then break end
+    out[#out + 1] = c
+  end
   return out
 end
 

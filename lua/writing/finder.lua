@@ -1,10 +1,25 @@
 local dict = require("writing.dict")
 local describe = require("writing.describe")
+local lang = require("writing.lang")
 local log = require("writing.log")
 
 local M = {}
 
 local ns = vim.api.nvim_create_namespace("writing_finder")
+
+vim.api.nvim_set_hl(0, "WritingDescribeModel", { fg = "#c678dd", bold = true, default = true })
+vim.api.nvim_set_hl(0, "WritingDescribeDict", { fg = "#61afef", default = true })
+
+local ICON = { model = "✨", dictionary = "📖" }
+local WORD_HL = { model = "WritingDescribeModel", dictionary = "WritingDescribeDict" }
+
+M.STATUS = {
+  asking = "📖 dictionary · ✨ asking model…",
+  done = "✨ model  📖 dictionary",
+  failed = "📖 dictionary only · model failed",
+  dictionary = "📖 dictionary",
+}
+local LANG_NAME = { en = "English", pt = "Portuguese" }
 local state
 
 local function valid_win(win) return win and vim.api.nvim_win_is_valid(win) end
@@ -18,18 +33,19 @@ local function query_text()
   return vim.trim(vim.api.nvim_buf_get_lines(state.input_buf, 0, 1, false)[1] or "")
 end
 
--- Sits right under the line being written so the sentence stays visible. Whether it flips above is decided
--- with the full list height, so the modal does not jump when the results arrive.
+-- Sits right under the line being written so the sentence stays visible, and flips above it only when the
+-- full list does not fit below but fits better above. The side is chosen with the full list height, so the
+-- modal does not jump when results arrive; when neither side has room, the list is shortened and scrolls.
 local function layout()
   local a = state.anchor
   local width = math.min(76, vim.o.columns - 4)
-  local height = math.max(1, #state.lines)
-  local full = 3 + (state.opts.results or 8) + 2
-  local bottom = vim.o.lines - vim.o.cmdheight - 1
-  local row = a.row
-  if row + full > bottom and a.row - 1 - full >= 0 then
-    row = a.row - 1 - full
-  end
+  local results = state.opts.results or 8
+  local bottom = vim.o.lines - vim.o.cmdheight
+  local below, above = bottom - a.row, a.row - 1
+  local flip = 5 + results > below and above > below
+  local max_list = math.max(1, math.min(results, (flip and above or below) - 5))
+  local height = math.max(1, math.min(#state.lines, max_list))
+  local row = flip and math.max(0, a.row - 1 - (5 + max_list)) or a.row
   local col = math.max(0, math.min(a.col, vim.o.columns - width - 2))
   return width, height, row, col
 end
@@ -43,11 +59,12 @@ local function render()
     marks[1] = { { 0, #lines[1], "WritingBoxDim" } }
   end
   for i, it in ipairs(s.items) do
-    local head = (i == s.index and " › " or "   ") .. it.word
+    local prefix = (i == s.index and " › " or "   ") .. (ICON[it.source] or "  ") .. " "
+    local head = prefix .. it.word
     local pos = "  " .. it.pos .. "  "
     local line = head .. pos .. truncate(it.definition, width - vim.fn.strdisplaywidth(head .. pos) - 1)
     lines[i] = line
-    marks[i] = { { #head, #line, "WritingBoxDim" } }
+    marks[i] = { { #prefix, #head, WORD_HL[it.source] or "WritingDescribeDict" }, { #head, #line, "WritingBoxDim" } }
   end
   s.lines = lines
   vim.bo[s.list_buf].modifiable = true
@@ -68,6 +85,7 @@ local function render()
     relative = "editor", row = row + 3, col = col, width = w, height = h,
     footer = s.status and (" " .. s.status .. " ") or "", footer_pos = "right",
   })
+  if s.items[s.index] then vim.api.nvim_win_set_cursor(s.list_win, { s.index, 0 }) end
 end
 
 function M.close()
@@ -111,6 +129,10 @@ local function keep_selection(items, word)
   return 1
 end
 
+local function title(language)
+  return " Describe a word" .. (language and (" · " .. language:upper()) or "") .. " "
+end
+
 function M.search()
   local s = state
   if not s then return end
@@ -121,16 +143,20 @@ function M.search()
   s.req_id = s.req_id + 1
   local id = s.req_id
   s.query = query
+  s.moved = false
+  local language = lang.detect(query, s.context_lang)
+  s.lang = language
+  vim.api.nvim_win_set_config(s.input_win, { title = title(language), title_pos = "left" })
 
-  if s.opts.loading() then
+  if s.opts.loading(language) then
     s.status = "loading dictionary…"
     render()
     vim.cmd.redraw()
   end
-  local idx = s.opts.index()
+  local idx = s.opts.index(language)
   if not idx then
     s.items, s.status = {}, nil
-    s.empty = "No dictionary installed. Run :WritingDictInstall"
+    s.empty = ("No %s dictionary installed. Run :WritingDictInstall %s"):format(LANG_NAME[language] or language, language)
     return render()
   end
   local limit = s.opts.results or 8
@@ -138,12 +164,12 @@ function M.search()
   s.items, s.index = describe.merge(idx, query, candidates, nil, limit), 1
   s.empty = "No match in the dictionary"
   local provider = s.opts.provider
-  s.status = provider and "dictionary · asking model…" or "dictionary"
+  s.status = provider and M.STATUS.asking or M.STATUS.dictionary
   render()
   if not provider then return end
 
   local started = vim.uv.hrtime()
-  local req = describe.request(query, { guesses = s.opts.guesses })
+  local req = describe.request(query, { guesses = s.opts.guesses, lang = language })
   local function send(p, retried)
     s.cancel = p.request(req, function(err, reply)
       if not state or state.req_id ~= id then return end
@@ -151,12 +177,12 @@ function M.search()
       if err and not retried and s.opts.fallback and s.opts.fallback ~= p then return send(s.opts.fallback, true) end
       log.write({ event = "describe", error = err and tostring(err), total_ms = math.floor((vim.uv.hrtime() - started) / 1e6) })
       if err then
-        state.status = "dictionary only · model failed"
+        state.status = M.STATUS.failed
       else
         local selected = state.items[state.index]
         state.items = describe.merge(idx, query, candidates, reply, limit)
-        state.index = selected and keep_selection(state.items, selected.word) or 1
-        state.status = "dictionary + model"
+        state.index = (state.moved and selected) and keep_selection(state.items, selected.word) or 1
+        state.status = M.STATUS.done
       end
       render()
     end)
@@ -167,6 +193,7 @@ end
 function M.move(delta)
   local s = state
   if not s or #s.items == 0 then return end
+  s.moved = true
   s.index = ((s.index - 1 + delta) % #s.items) + 1
   render()
 end
@@ -202,12 +229,14 @@ function M.open(opts)
   local mode = vim.api.nvim_get_mode().mode
   state = {
     opts = vim.tbl_extend("keep", opts or {}, {
-      index = function() return dict.load("en") end,
-      loading = function() return dict.loading("en") end,
+      index = dict.load,
+      loading = dict.loading,
     }),
     origin = { win = win, buf = vim.api.nvim_get_current_buf(), row = pos[1], col = pos[2], insert = mode:sub(1, 1) == "i" },
     items = {}, index = 1, req_id = 0, lines = { "" },
   }
+  local first = math.max(1, pos[1] - 2)
+  state.context_lang = lang.detect(table.concat(vim.api.nvim_buf_get_lines(0, first - 1, pos[1], false), " "))
   local info = vim.fn.getwininfo(win)[1]
   local text = vim.api.nvim_buf_get_lines(0, pos[1] - 1, pos[1], false)[1] or ""
   local screen = vim.fn.screenpos(win, pos[1], math.max(1, #text))
@@ -227,7 +256,7 @@ function M.open(opts)
   })
   s.input_win = vim.api.nvim_open_win(s.input_buf, true, {
     relative = "editor", row = row, col = col, width = w, height = 1,
-    style = "minimal", border = "rounded", title = " Describe a word ", title_pos = "left", zindex = 61,
+    style = "minimal", border = "rounded", title = title(), title_pos = "left", zindex = 61,
   })
   for _, wn in ipairs({ s.input_win, s.list_win }) do
     vim.wo[wn].winhighlight = "NormalFloat:WritingBox,FloatBorder:WritingBoxBorder"
@@ -257,7 +286,7 @@ function M.open(opts)
 
   render()
   vim.cmd.startinsert()
-  if s.opts.preload ~= false then dict.preload("en") end
+  if s.opts.preload ~= false then dict.preload(s.context_lang) end
 end
 
 return M

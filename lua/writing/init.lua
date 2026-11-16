@@ -16,12 +16,15 @@ local style_cache = {}
 local spell_ready = false
 local applying = false
 local enabled = true
+local active = true
+local buf_maps = {}
 local layout = "popup"
 local preview = "strike"
 local show_spell, hide_spell
 local spell = require("writing.spell")
 local dict = require("writing.dict")
 local finder = require("writing.finder")
+local define = require("writing.define")
 local providers
 
 local function real_timer()
@@ -372,11 +375,19 @@ function M.describe()
   })
 end
 
+function M.define(word)
+  core:cancel_pending()
+  core:clear()
+  define.open(word)
+end
+
 function M.attach(buf)
   buf = buf or vim.api.nvim_get_current_buf()
-  if vim.b[buf].writing_attached then return end
+  if not active or vim.b[buf].writing_attached then return end
   if project_disabled(buf) then return end
   vim.b[buf].writing_attached = true
+  vim.b[buf].writing_saved = { spelllang = vim.bo[buf].spelllang, spellcapcheck = vim.bo[buf].spellcapcheck }
+  buf_maps[buf] = {}
   update_badge()
   if spell_ready then spell.apply(buf, cfg.spell.langs) end
   show_spell(buf)
@@ -401,12 +412,13 @@ function M.attach(buf)
   local k = cfg.keys
   local function bmap(modes, lhs, fn, desc)
     vim.keymap.set(modes, lhs, fn, { buffer = buf, silent = true, desc = "writing: " .. desc })
+    table.insert(buf_maps[buf], { modes, lhs })
   end
   bmap({ "n", "x" }, k.action, M.suggest_now, "suggest now")
   bmap("n", k.synonyms, M.synonyms_now, "synonyms for the word")
   bmap({ "n", "x" }, k.make_sense, M.make_sense, "make sense")
   bmap("n", k.toggle, M.toggle, "switch burst/editor mode")
-  vim.keymap.set({ "n", "i", "x" }, k.switch, M.toggle, { buffer = buf, silent = true, desc = "writing: switch burst/editor mode" })
+  bmap({ "n", "i", "x" }, k.switch, M.toggle, "switch burst/editor mode")
   bmap("n", k.layout, M.cycle_layout, "cycle suggestion layout")
   bmap("n", k.preview, M.cycle_preview, "cycle change preview")
   bmap("n", k.burst, M.burst_mode, "burst mode")
@@ -414,7 +426,77 @@ function M.attach(buf)
   bmap("n", k.manual, M.toggle_manual, "manual only")
   bmap("n", k.describe, M.describe, "find a word from a description")
   if k.describe_insert then bmap("i", k.describe_insert, M.describe, "find a word from a description") end
+  bmap("n", k.define, function() M.define() end, "meaning of the word under the cursor")
 end
+
+function M.detach(buf)
+  buf = buf or vim.api.nvim_get_current_buf()
+  if not vim.b[buf].writing_attached then return end
+  vim.api.nvim_clear_autocmds({ group = group, buffer = buf })
+  for _, m in ipairs(buf_maps[buf] or {}) do
+    pcall(vim.keymap.del, m[1], m[2], { buffer = buf })
+  end
+  buf_maps[buf] = nil
+  for _, win in ipairs(vim.fn.win_findbuf(buf)) do
+    if vim.w[win].writing_spell then
+      vim.wo[win].spell = false
+      vim.w[win].writing_spell = nil
+    end
+  end
+  local saved = vim.b[buf].writing_saved
+  if saved then
+    vim.bo[buf].spelllang = saved.spelllang
+    vim.bo[buf].spellcapcheck = saved.spellcapcheck
+  end
+  vim.b[buf].writing_saved = nil
+  vim.b[buf].writing_attached = nil
+end
+
+local function wanted(buf)
+  return vim.api.nvim_buf_is_loaded(buf) and vim.tbl_contains(cfg.filetypes, vim.bo[buf].filetype)
+end
+
+local detached = {}
+
+-- Turns the whole plugin off: nothing stays attached, no request runs, and the dictionary indexes are freed.
+-- Buffers attached by hand with :WritingAttach are remembered, so enabling puts them back too.
+function M.disable(quiet)
+  if not active then return end
+  active = false
+  core:cancel_pending()
+  core:clear()
+  unmap_keys()
+  box.close()
+  finder.close()
+  define.close()
+  detached = {}
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.b[buf].writing_attached then
+      detached[#detached + 1] = buf
+      M.detach(buf)
+    end
+  end
+  box.hide_badge()
+  dict.unload()
+  if not quiet then vim.notify("writing: off (:WritingEnable to turn it back on)") end
+end
+
+function M.enable(quiet)
+  if active then return end
+  active = true
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if wanted(buf) or (vim.tbl_contains(detached, buf) and vim.api.nvim_buf_is_loaded(buf)) then M.attach(buf) end
+  end
+  detached = {}
+  if not enabled then
+    core:set_hidden(true)
+    hide_spell()
+  end
+  update_badge()
+  if not quiet then vim.notify("writing: on") end
+end
+
+function M.is_enabled() return active end
 
 local function refresh_spell()
   local missing = spell.missing(cfg.spell.langs)
@@ -459,6 +541,7 @@ function M.setup(user)
   })
 
   enabled = cfg.mode ~= "burst"
+  active = cfg.enabled ~= false
   refresh_spell()
   group = vim.api.nvim_create_augroup("writing", { clear = true })
   vim.api.nvim_create_autocmd("FileType", {
@@ -467,26 +550,37 @@ function M.setup(user)
     callback = function(args) M.attach(args.buf) end,
   })
 
-  vim.api.nvim_create_autocmd({ "BufEnter", "WinEnter", "VimResized" }, { group = group, callback = update_badge })
-  vim.api.nvim_create_user_command("WritingAttach", function() M.attach() end, {})
-  vim.api.nvim_create_user_command("WritingNow", M.suggest_now, {})
-  vim.api.nvim_create_user_command("WritingSense", M.make_sense, { range = true })
-  vim.api.nvim_create_user_command("WritingToggle", M.toggle, {})
-  vim.api.nvim_create_user_command("WritingLayout", function(args)
+  vim.api.nvim_create_autocmd({ "BufEnter", "WinEnter", "VimResized" }, {
+    group = group,
+    callback = function() if active then update_badge() end end,
+  })
+  local function command(name, fn, opts)
+    vim.api.nvim_create_user_command(name, function(args)
+      if not active then return vim.notify("writing: off (:WritingEnable to turn it on)") end
+      fn(args)
+    end, opts or {})
+  end
+  vim.api.nvim_create_user_command("WritingEnable", function() M.enable() end, {})
+  vim.api.nvim_create_user_command("WritingDisable", function() M.disable() end, {})
+  command("WritingAttach", function() M.attach() end)
+  command("WritingNow", M.suggest_now)
+  command("WritingSense", M.make_sense, { range = true })
+  command("WritingToggle", M.toggle)
+  command("WritingLayout", function(args)
     if args.args == "" then M.cycle_layout() else M.set_layout(args.args) end
   end, {
     nargs = "?",
     complete = function() return box.LAYOUTS end,
   })
-  vim.api.nvim_create_user_command("WritingPreview", function(args)
+  command("WritingPreview", function(args)
     if args.args == "" then M.cycle_preview() else M.set_preview(args.args) end
   end, {
     nargs = "?",
     complete = function() return box.PREVIEWS end,
   })
-  vim.api.nvim_create_user_command("WritingBurst", function() M.burst_mode() end, {})
-  vim.api.nvim_create_user_command("WritingEditor", function() M.editor_mode() end, {})
-  vim.api.nvim_create_user_command("WritingManual", M.toggle_manual, {})
+  command("WritingBurst", function() M.burst_mode() end)
+  command("WritingEditor", function() M.editor_mode() end)
+  command("WritingManual", M.toggle_manual)
   vim.api.nvim_create_user_command("WritingSpellInstall", function()
     vim.notify("writing: downloading spell files…")
     spell.install(cfg.spell.langs, function(ok)
@@ -494,23 +588,32 @@ function M.setup(user)
       vim.notify(ok and "writing: spell files installed" or "writing: spell download failed", ok and vim.log.levels.INFO or vim.log.levels.ERROR)
     end)
   end, {})
-  vim.api.nvim_create_user_command("WritingDescribe", M.describe, {})
-  vim.api.nvim_create_user_command("WritingDictInstall", function()
-    vim.notify("writing: downloading the English dictionary (Open English WordNet)…")
-    dict.install("en", function(ok, info)
-      if ok then
-        vim.notify(("writing: dictionary installed (%d entries)"):format(info))
+  command("WritingDescribe", M.describe)
+  command("WritingDefine", function(args)
+    M.define(args.args ~= "" and args.args or nil)
+  end, { nargs = "?" })
+  vim.api.nvim_create_user_command("WritingDictInstall", function(args)
+    local langs = args.args ~= "" and { args.args } or { "en", "pt" }
+    for _, l in ipairs(langs) do
+      local src = dict.source(l)
+      if not src then
+        vim.notify("writing: no dictionary for " .. l .. " (use en or pt)", vim.log.levels.ERROR)
       else
-        vim.notify("writing: dictionary install failed: " .. tostring(info), vim.log.levels.ERROR)
+        vim.notify(("writing: downloading the %s dictionary (%s)…"):format(l, src.name))
+        dict.install(l, function(ok, info)
+          if ok then
+            vim.notify(("writing: %s dictionary installed (%d entries)"):format(l, info))
+          else
+            vim.notify(("writing: %s dictionary install failed: %s"):format(l, tostring(info)), vim.log.levels.ERROR)
+          end
+        end)
       end
-    end)
-  end, {})
+    end
+  end, { nargs = "?", complete = function() return { "en", "pt" } end })
   vim.api.nvim_create_user_command("WritingLog", function() vim.cmd.edit(cfg.log_file) end, {})
 
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.api.nvim_buf_is_loaded(buf) and vim.tbl_contains(cfg.filetypes, vim.bo[buf].filetype) then
-      M.attach(buf)
-    end
+    if wanted(buf) then M.attach(buf) end
   end
   if not enabled then
     core:set_hidden(true)

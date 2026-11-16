@@ -7,7 +7,7 @@ T ?=
 
 help:
 	@echo "make run      open nvim with the plugin and a scratch copy of sample.md"
-	@echo "make test     run the headless test suite (T=context|core|buffer for one file)"
+	@echo "make test     run the headless test suite (T=context|core|buffer|dict|finder|define for one file)"
 	@echo "make bench    run the latency benchmark (needs API keys or BENCH_TARGETS)"
 	@echo "make clean    remove the scratch copy"
 

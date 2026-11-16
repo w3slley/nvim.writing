@@ -202,6 +202,65 @@ return {
     end,
   },
   {
+    name = "disabling detaches every buffer and restores its options; enabling attaches again",
+    fn = function()
+      vim.cmd("silent! %bwipeout!")
+      package.loaded["writing"] = nil
+      local writing = require("writing")
+      writing.setup({
+        log_file = vim.fn.tempname(), delays = { word = 30, sentence = 30, spell = 30 },
+        spell = { langs = { "en" } },
+        providers = { fast = { type = "fake", respond = respond, delay = 5 }, strong = { type = "fake", respond = respond, delay = 5 } },
+      })
+      local box = require("writing.box")
+      local buf = vim.api.nvim_create_buf(true, false)
+      vim.api.nvim_set_current_buf(buf)
+      vim.bo[buf].spelllang = "de"
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "The weather is lovely today." })
+      writing.attach(buf)
+      eq(vim.bo[buf].spelllang, "en")
+      eq(vim.fn.maparg("<leader>lk", "n", false, true).buffer, 1)
+      writing.disable(true)
+      eq(writing.is_enabled(), false)
+      eq(vim.b[buf].writing_attached, nil)
+      eq(vim.bo[buf].spelllang, "de", "spelllang is restored")
+      eq(vim.wo.spell, false)
+      eq(vim.fn.maparg("<leader>lk", "n"), "", "buffer keymaps are removed")
+      eq(box.badge_text(), nil)
+      eq(#vim.api.nvim_get_autocmds({ group = "writing", buffer = buf }), 0)
+      vim.api.nvim_win_set_cursor(0, { 1, 16 })
+      event(buf)
+      vim.wait(150, function() return false end, 10)
+      eq(writing._core().view.status, "idle")
+      writing.attach(buf)
+      eq(vim.b[buf].writing_attached, nil, "nothing attaches while off")
+      writing.enable(true)
+      eq(vim.b[buf].writing_attached, true, "a buffer attached by hand comes back")
+      eq(box.badge_text(), "EDITOR")
+      event(buf)
+      wait_ready(writing)
+    end,
+  },
+  {
+    name = "enabled = false starts off and leaves new buffers alone until enabled",
+    fn = function()
+      vim.cmd("silent! %bwipeout!")
+      package.loaded["writing"] = nil
+      local writing = require("writing")
+      writing.setup({
+        enabled = false, log_file = vim.fn.tempname(), spell = { langs = { "en" } },
+        providers = { fast = { type = "fake", respond = respond }, strong = { type = "fake", respond = respond } },
+      })
+      local buf = vim.api.nvim_create_buf(true, false)
+      vim.api.nvim_set_current_buf(buf)
+      vim.bo[buf].filetype = "markdown"
+      eq(vim.b[buf].writing_attached, nil)
+      writing.enable(true)
+      eq(vim.b[buf].writing_attached, true)
+      writing.disable(true)
+    end,
+  },
+  {
     name = "a mode badge is always visible in attached buffers and follows the mode",
     fn = function()
       local writing, buf = fresh({ "Some text here." })

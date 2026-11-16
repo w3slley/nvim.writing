@@ -1,6 +1,7 @@
 local M = {}
 
 M.defaults = {
+  enabled = true,
   mode = "editor",
   filetypes = { "markdown", "text" },
   delays = { word = 400, sentence = 350, spell = 250, selection = 350 },
@@ -29,6 +30,7 @@ M.defaults = {
     manual = "<leader>lm",
     describe = "<leader>lw",
     describe_insert = "<A-w>",
+    define = "<leader>lk",
     next = "<S-Tab>",
     prev = "<A-k>",
     accept = "<Tab>",

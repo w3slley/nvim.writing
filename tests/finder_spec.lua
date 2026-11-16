@@ -66,9 +66,13 @@ return {
     finder.confirm()
     eq(words(), { "nostalgia" })
     assert(finder._state().status:find("asking"), finder._state().status)
-    vim.wait(500, function() return finder._state().status == "dictionary + model" end, 5)
+    vim.wait(500, function() return finder._state().status == finder.STATUS.done end, 5)
     eq(words(), { "pessimist", "nostalgia" }, "invented or unknown guesses are dropped")
+    eq(finder._state().index, 1, "selection stays on top when the user has not moved")
     eq(finder._state().items[1].definition, "a person who expects the worst")
+    local rows = vim.api.nvim_buf_get_lines(finder._state().list_buf, 0, -1, false)
+    assert(rows[1]:find("✨ pessimist", 1, true), rows[1])
+    assert(rows[2]:find("📖 nostalgia", 1, true), rows[2])
     finder.close()
   end },
   { name = "enter on an unchanged query inserts the selected word and closes", fn = function()
@@ -77,7 +81,7 @@ return {
     finder.open({ provider = fake({ "ephemeral" }), index = function() return INDEX end })
     type_query("lasting a short time")
     finder.confirm()
-    vim.wait(500, function() return finder._state().status == "dictionary + model" end, 5)
+    vim.wait(500, function() return finder._state().status == finder.STATUS.done end, 5)
     finder.move(1)
     finder.move(-1)
     finder.confirm()
@@ -90,9 +94,37 @@ return {
     finder.open({ provider = broken, index = function() return INDEX end })
     type_query("a longing for the past")
     finder.confirm()
-    vim.wait(500, function() return finder._state().status ~= "dictionary · asking model…" end, 5)
+    vim.wait(500, function() return finder._state().status ~= finder.STATUS.asking end, 5)
     eq(words(), { "nostalgia" })
-    eq(finder._state().status, "dictionary only · model failed")
+    eq(finder._state().status, finder.STATUS.failed)
+    finder.close()
+  end },
+  { name = "the description's language picks the dictionary and the prompt", fn = function()
+    buffer("x")
+    local asked, loaded = {}, {}
+    local provider = { request = function(req, cb)
+      asked[#asked + 1] = req.language
+      vim.schedule(function() cb(nil, { items = {} }) end)
+      return function() end
+    end }
+    finder.open({ provider = provider, preload = false, index = function(l) loaded[#loaded + 1] = l return INDEX end })
+    type_query("medo de espaços fechados")
+    finder.confirm()
+    eq(finder._state().lang, "pt")
+    eq(vim.api.nvim_win_get_config(finder._state().input_win).title[1][1], " Describe a word · PT ")
+    type_query("fear of closed spaces")
+    finder.confirm()
+    eq(loaded, { "pt", "en" })
+    eq(asked, { "pt", "en" })
+    finder.close()
+  end },
+  { name = "a description with no language clue follows the text being written", fn = function()
+    buffer("Ontem à noite senti uma enorme")
+    vim.api.nvim_win_set_cursor(0, { 1, 30 })
+    finder.open({ preload = false, index = function() return INDEX end })
+    type_query("saudade")
+    finder.confirm()
+    eq(finder._state().lang, "pt")
     finder.close()
   end },
   { name = "a missing dictionary says how to install it", fn = function()
@@ -100,7 +132,8 @@ return {
     finder.open({ index = function() return nil end })
     type_query("anything")
     finder.confirm()
-    assert(finder._state().empty:find("WritingDictInstall"))
+    assert(finder._state().empty:find("No English dictionary installed. Run :WritingDictInstall en", 1, true),
+      finder._state().empty)
     finder.close()
   end },
 }
