@@ -237,6 +237,7 @@ return {
     name = "the word or sentence being changed is highlighted, selections are not, and it clears on accept",
     fn = function()
       local writing, buf = fresh({ "Intro line. The cat sat on the mat." })
+      writing.set_preview("below")
       local target_ns = vim.api.nvim_create_namespace("writing_target")
       local function marks() return vim.api.nvim_buf_get_extmarks(buf, target_ns, 0, -1, { details = true }) end
 
@@ -421,7 +422,7 @@ return {
       event(buf)
       wait_ready(writing)
 
-      eq(writing.preview(), "below")
+      writing.set_preview("below")
       local d = marks(ghost_ns)[1][4]
       eq(not d.virt_lines_above, true)
       eq(has(d, "WritingOld", "lovely"), true)
@@ -441,7 +442,41 @@ return {
       eq(marks(target_ns)[1][4].hl_group, "WritingOld")
 
       writing.cycle_preview()
+      eq(writing.preview(), "strike")
+      writing.cycle_preview()
       eq(writing.preview(), "below")
+    end,
+  },
+  {
+    name = "strike preview crosses out the text in place and shows only the new green text below, selections included",
+    fn = function()
+      local writing, buf = fresh({ "The weather is lovely today." })
+      local ghost_ns = vim.api.nvim_create_namespace("writing_ghost")
+      local target_ns = vim.api.nvim_create_namespace("writing_target")
+      local function marks(ns) return vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, { details = true }) end
+      eq(writing.preview(), "strike")
+      vim.api.nvim_win_set_cursor(0, { 1, 16 })
+      event(buf)
+      wait_ready(writing)
+      eq(marks(target_ns)[1][4].hl_group, "WritingOld")
+      local d = marks(ghost_ns)[1][4]
+      eq(#d.virt_lines, 1)
+      local groups, texts = {}, {}
+      for _, chunk in ipairs(d.virt_lines[1]) do
+        groups[#groups + 1] = tostring(chunk[2])
+        texts[#texts + 1] = chunk[1]
+      end
+      eq(table.concat(groups, ","):find("WritingOld", 1, true), nil)
+      eq(texts[#texts], "nice")
+      eq(#texts[1], 15)
+
+      writing._core():ignore()
+      local ctx = require("writing.context").selection({ "The weather is lovely today." }, 1, 4, 18, 2)
+      ctx.row = 1
+      writing._core():trigger(ctx)
+      wait_ready(writing)
+      eq(writing._core().view.kind, "selection")
+      eq(marks(target_ns)[1][4].hl_group, "WritingOld")
     end,
   },
   {
@@ -449,6 +484,7 @@ return {
     fn = function()
       local text = "The cat sat on the mat while the dog slept near the fire and the birds sang loudly outside."
       local writing, buf = fresh({ "Intro line. " .. text })
+      writing.set_preview("below")
       local ghost_ns = vim.api.nvim_create_namespace("writing_ghost")
       local line = vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1]
       vim.api.nvim_win_set_cursor(0, { 1, #line - 1 })

@@ -19,10 +19,10 @@ The cursor position decides what you get.
 
 | Cursor | Suggestion | Source |
 | --- | --- | --- |
-| Resting on a word (about 700 ms) | Synonyms | LLM |
+| Resting on a word (about 400 ms) | Synonyms | LLM |
 | Resting on a misspelled word | Spelling fixes | Neovim's built-in spell checker, no LLM |
-| Right after a sentence-ending `.` `!` `?` (about 600 ms) | Sentence variations | LLM |
-| A visual selection of 2 or more words on one line (about 500 ms) | Replacements for the fragment | LLM |
+| Right after a sentence-ending `.` `!` `?` (about 350 ms) | Sentence variations | LLM |
+| A visual selection of 2 or more words on one line (about 350 ms) | Replacements for the fragment | LLM |
 | `<leader>lp` on a paragraph or a line selection | Two plans plus off-topic flags, with a diff preview | LLM |
 
 Details:
@@ -32,6 +32,20 @@ Details:
 - The highlighted suggestion is previewed as a diff: the old text struck through and the new text in green (see Change preview).
 - Any typing or cursor movement cancels the pending request and closes the box. A response that arrives late is discarded.
 - Escaping a suggestion (`Esc`) is remembered for that text, so it does not nag again until the text changes.
+
+## Find a word from a description
+
+When you know what you mean but not the word, press `<leader>lw` (or `<A-w>` in insert mode). A modal opens: describe the word, for example "a feeling of longing for the past", and press `Enter`.
+
+1. Matches from a local dictionary show up at once. They come from searching the dictionary's definitions for your description.
+2. The fast model is then asked for its own guesses. **Only guesses that exist in the dictionary are kept**, and every word is shown with the dictionary's definition, not the model's. An invented word never reaches the list, and a real word with the wrong meaning shows its real meaning, so you can see it does not fit.
+3. Move with `<C-n>`/`<C-p>` (or `<Tab>`/`<S-Tab>`, arrows) and press `Enter` to insert the word at the cursor. Spaces are added only where the word would touch another word. `Esc` closes the modal.
+
+![How a description becomes a word](docs/describe.png)
+
+The model never sees the dictionary list: small models just echo a list back, so they guess freely and the dictionary filters. If the model is slow or fails, the dictionary matches stay. Editing the description and pressing `Enter` searches again.
+
+Install the dictionary once with `:WritingDictInstall`. It downloads [Open English WordNet](https://en-word.net) (CC BY 4.0, about 107,000 word senses) and converts it to a 12 MB file in Neovim's data folder. English only for now. The index is built in the background the first time the modal opens in a session (about 2 seconds, about 80 MB of memory).
 
 ## Box layouts
 
@@ -52,7 +66,8 @@ The highlighted alternative is previewed against your text as a diff: the old te
 
 | Preview | What it looks like |
 | --- | --- |
-| `below` (default) | A line under the text: `~~bought~~ → acquired`, aligned with the word. Long sentences become the struck-through old sentence followed by the new one in green |
+| `strike` (default) | The old text is struck through where it sits, and only the new text is shown in green on a line below it, aligned with it. Works for visual selections too |
+| `below` | A line under the text: `~~bought~~ → acquired`, aligned with the word. Long sentences become the struck-through old sentence followed by the new one in green |
 | `above` | The same line, drawn above the text |
 | `inline` | The old text is struck through in place and the new text appears right after it, in green |
 
@@ -80,8 +95,9 @@ Keys that are always available in attached buffers:
 | `<leader>lt` | Switch between burst and editor mode |
 | `<leader>lb` / `<leader>le` | Go to burst / editor mode |
 | `<leader>lv` | Cycle the box layout (popup, list, strip, corner) |
-| `<leader>ld` | Cycle the change preview (below, above, inline) |
+| `<leader>ld` | Cycle the change preview (strike, below, above, inline) |
 | `<leader>lm` | Manual only: stop ambient suggestions, keep the keys |
+| `<leader>lw` / `<A-w>` | Find a word from a description (`<A-w>` works in insert mode) |
 | `<A-m>` | Switch mode (also in insert and visual mode) |
 
 Note: `<leader>l` followed by another key means Neovim waits for `timeoutlen` if you also map plain `<leader>l`. That only affects Markdown and text buffers. Every key can be changed in `setup()`.
@@ -175,6 +191,16 @@ require("writing").setup({
 
 The CLI must be logged in (`claude` then `/login`).
 
+## How it stays fast
+
+![Before and after timeline](docs/latency.png)
+
+- **Prefetch.** The request starts shortly after the cursor rests, while the delay is still counting down. Moving the cursor cancels it.
+- **Plain-text replies.** Synonyms, spelling, selections and sentences are requested as one alternative per line, with a token cap, instead of JSON. Make-sense still uses JSON.
+- **Streaming.** With OpenAI-compatible providers, each alternative appears as soon as its line is complete, and the rest fill in. The highlighted choice is kept while they arrive.
+
+The `claude_cli` provider does not stream and keeps using JSON.
+
 ## Local setup
 
 1. Install [Ollama](https://ollama.com) and start the server: `ollama serve` (or open the Ollama app).
@@ -182,6 +208,7 @@ The CLI must be logged in (`claude` then `/login`).
 3. Keep the model loaded between requests, otherwise the first request after an idle period pays a load delay: `OLLAMA_KEEP_ALIVE=60m ollama serve`.
 4. Point the plugin at it with the local config above.
 5. For spelling in Portuguese, install the dictionary once from Neovim: `:WritingSpellInstall`. English ships with Neovim.
+6. For finding words from a description, install the word dictionary once: `:WritingDictInstall`.
 
 Measured on an M1 Max with 32 GB (roughly 0.4 to 0.7 seconds for synonyms and 0.9 to 1.5 seconds for sentence variations with `gemma3:4b`). Run your own numbers with `make bench`. Small models make mistakes, so `Ctrl+r` is useful.
 
@@ -199,7 +226,8 @@ All defaults, all optional:
 require("writing").setup({
   mode = "editor",
   filetypes = { "markdown", "text" },
-  delays = { word = 700, sentence = 600, spell = 250, selection = 500 },
+  delays = { word = 400, sentence = 350, spell = 250, selection = 350 },
+  prefetch = 100,
   spell = {
     enabled = true,
     langs = { "en", "pt" },
@@ -209,16 +237,20 @@ require("writing").setup({
   },
   max_requests_per_minute = 30,
   counts = { synonyms = 4, variations = 3, make_sense = 2, selection = 3, spelling = 4 },
-  box = { layout = "popup", preview = "below", position = "bottom_right", badge = true },
+  describe = { results = 8, guesses = 8 },
+  box = { layout = "popup", preview = "strike", position = "bottom_right", badge = true },
   providers = { fast = {}, strong = {} },
   keys = {},
 })
 ```
 
 - `mode`: `"editor"` or `"burst"` at startup.
+- `delays`: how long the cursor must rest before the box appears, in ms.
+- `prefetch`: start the request this many ms after the cursor rests, while the delay is still running, so the answer is ready when the box appears. Nothing is shown early. `0` or `false` turns it off, and the request then starts when the delay ends.
+- `describe.results`: how many words the description modal lists. `describe.guesses`: how many words the model is asked for (some are dropped by the dictionary check).
 - `spell.while_typing`: also show spelling suggestions right after you type a misspelled word and a space. Off by default.
 - `box.layout`: `"popup"`, `"list"`, `"strip"` or `"corner"`.
-- `box.preview`: `"below"`, `"above"` or `"inline"`.
+- `box.preview`: `"strike"`, `"below"`, `"above"` or `"inline"`.
 - `box.position`: `"bottom_right"` or `"top_right"`. Used by the `corner` layout and the mode badge.
 - `box.badge`: show the always-on mode badge.
 - `style_file`: a `.writing-style.md` file at the project root (tone, words to avoid, glossary) is added to every prompt.
@@ -227,7 +259,7 @@ require("writing").setup({
 
 ## Commands
 
-`:WritingNow`, `:WritingSense`, `:WritingLayout [name]`, `:WritingPreview [name]`, `:WritingToggle`, `:WritingBurst`, `:WritingEditor`, `:WritingManual`, `:WritingAttach`, `:WritingSpellInstall`, `:WritingLog`.
+`:WritingNow`, `:WritingSense`, `:WritingLayout [name]`, `:WritingPreview [name]`, `:WritingToggle`, `:WritingBurst`, `:WritingEditor`, `:WritingManual`, `:WritingAttach`, `:WritingSpellInstall`, `:WritingDescribe`, `:WritingDictInstall`, `:WritingLog`.
 
 `:WritingLog` opens the request log. Every request records provider, model, time to first token and total time, plus accept, ignore and regenerate events, so you can see which modes are worth keeping.
 
@@ -253,3 +285,4 @@ BENCH_TARGETS="local|http://localhost:11434/v1/chat/completions|gemma3:4b" make 
 - Sentence and selection suggestions work within one line. A sentence wrapped across lines is not handled.
 - Make-sense works on a paragraph or line selection and shows the plan with a diff before applying.
 - Quality depends on the model. Small local models are fast but make mistakes, especially in Portuguese.
+- Finding a word from a description is English only. A Portuguese dictionary is planned.

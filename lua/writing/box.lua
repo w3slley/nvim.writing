@@ -79,7 +79,7 @@ function M.build_lines(view, keys, width)
   local lines, marks = {}, {}
   local counter = ""
   if view.items and #view.items > 0 then counter = ("%d/%d"):format(view.index, #view.items) end
-  local suffix = view.status == "loading" and "  …" or ""
+  local suffix = (view.status == "loading" or view.streaming) and "  …" or ""
   lines[1] = (TITLES[view.kind] or "") .. suffix .. (counter ~= "" and ("  " .. counter) or "")
   marks[#marks + 1] = { row = 0, group = "WritingBoxDim" }
 
@@ -170,12 +170,12 @@ function M.close()
   end
 end
 
-M.PREVIEWS = { "below", "above", "inline" }
+M.PREVIEWS = { "strike", "below", "above", "inline" }
 
 local function render_target(buf, view, strike)
   vim.api.nvim_buf_clear_namespace(buf, target_ns, 0, -1)
   local ctx = view.ctx
-  if not (ctx and HIGHLIGHTED[view.kind]) then return end
+  if not (ctx and (HIGHLIGHTED[view.kind] or (strike and view.kind == "selection"))) then return end
   vim.api.nvim_buf_set_extmark(buf, target_ns, ctx.row - 1, ctx.scol, {
     end_row = ctx.row - 1, end_col = ctx.ecol, hl_group = strike and "WritingOld" or "WritingTarget", priority = 150,
   })
@@ -210,8 +210,23 @@ local function build_preview(buf, view, style)
   local avail = (win ~= -1 and vim.api.nvim_win_get_width(win) or vim.o.columns) - 6
   local line = vim.api.nvim_buf_get_lines(buf, ctx.row - 1, ctx.row, false)[1] or ""
   local old = line:sub(ctx.scol + 1, ctx.ecol)
-  local indent = math.min(vim.fn.strdisplaywidth(line:sub(1, ctx.scol)), 40)
+  local indent = vim.fn.strdisplaywidth(line:sub(1, ctx.scol))
+  if win ~= -1 then
+    local sp = vim.fn.screenpos(win, ctx.row, ctx.scol + 1)
+    local info = vim.fn.getwininfo(win)[1]
+    if sp.row > 0 then indent = math.max(0, sp.col - info.wincol - info.textoff) end
+  end
   local joined = vim.fn.strdisplaywidth(old) + vim.fn.strdisplaywidth(new) + 3
+
+  if style == "strike" then
+    local virt
+    if indent + vim.fn.strdisplaywidth(new) <= avail then
+      virt = { { { string.rep(" ", indent), "WritingBoxDim" }, { new, "WritingNew" } } }
+    else
+      virt = wrapped_virt(new, avail, "WritingNew")
+    end
+    return { lines = virt, above = false, row = ctx.row - 1, strike = true }
+  end
 
   local virt
   if indent + joined <= avail then
@@ -263,7 +278,7 @@ local function strip_line(view, keys)
   else
     add(" " .. (TITLES[view.kind] or "") .. " ", "WritingBoxDim")
   end
-  if view.status == "loading" then add("  …", "WritingBoxDim") end
+  if view.status == "loading" or view.streaming then add("  …", "WritingBoxDim") end
   local accept = view.kind == "make_sense" and (view.confirmed and " apply" or " preview") or " accept"
   add(("   %s%s  %s next  %s more  %s"):format(label(keys.accept), accept, label(keys.next), label(keys.regenerate), label(keys.ignore)), "WritingBoxDim")
   return { chunks }

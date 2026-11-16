@@ -17,9 +17,12 @@ local spell_ready = false
 local applying = false
 local enabled = true
 local layout = "popup"
-local preview = "below"
+local preview = "strike"
 local show_spell, hide_spell
 local spell = require("writing.spell")
+local dict = require("writing.dict")
+local finder = require("writing.finder")
+local providers
 
 local function real_timer()
   return {
@@ -358,6 +361,17 @@ function hide_spell()
   end
 end
 
+function M.describe()
+  core:cancel_pending()
+  core:clear()
+  finder.open({
+    provider = providers.fast,
+    fallback = providers.strong,
+    results = cfg.describe.results,
+    guesses = cfg.describe.guesses,
+  })
+end
+
 function M.attach(buf)
   buf = buf or vim.api.nvim_get_current_buf()
   if vim.b[buf].writing_attached then return end
@@ -398,6 +412,8 @@ function M.attach(buf)
   bmap("n", k.burst, M.burst_mode, "burst mode")
   bmap("n", k.editor, M.editor_mode, "editor mode")
   bmap("n", k.manual, M.toggle_manual, "manual only")
+  bmap("n", k.describe, M.describe, "find a word from a description")
+  if k.describe_insert then bmap("i", k.describe_insert, M.describe, "find a word from a description") end
 end
 
 local function refresh_spell()
@@ -425,7 +441,7 @@ function M.setup(user)
   log.setup(cfg.log_file)
   box.setup_highlights(cfg.spell.highlight)
 
-  local providers = {
+  providers = {
     fast = provider.create(cfg.providers.fast),
     strong = provider.create(cfg.providers.strong),
   }
@@ -476,6 +492,17 @@ function M.setup(user)
     spell.install(cfg.spell.langs, function(ok)
       refresh_spell()
       vim.notify(ok and "writing: spell files installed" or "writing: spell download failed", ok and vim.log.levels.INFO or vim.log.levels.ERROR)
+    end)
+  end, {})
+  vim.api.nvim_create_user_command("WritingDescribe", M.describe, {})
+  vim.api.nvim_create_user_command("WritingDictInstall", function()
+    vim.notify("writing: downloading the English dictionary (Open English WordNet)…")
+    dict.install("en", function(ok, info)
+      if ok then
+        vim.notify(("writing: dictionary installed (%d entries)"):format(info))
+      else
+        vim.notify("writing: dictionary install failed: " .. tostring(info), vim.log.levels.ERROR)
+      end
     end)
   end, {})
   vim.api.nvim_create_user_command("WritingLog", function() vim.cmd.edit(cfg.log_file) end, {})

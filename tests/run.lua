@@ -5,7 +5,7 @@ package.path = root .. "/?.lua;" .. package.path
 local only = arg and arg[1]
 local failed, total = 0, 0
 
-for _, name in ipairs({ "context", "core", "buffer" }) do
+for _, name in ipairs({ "context", "core", "buffer", "dict", "finder" }) do
   if not only or only == name then
     local tests = dofile(root .. "/tests/" .. name .. "_spec.lua")
     for _, t in ipairs(tests) do

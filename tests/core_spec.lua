@@ -1,5 +1,6 @@
 local Core = require("writing.core")
 local config = require("writing.config").resolve({})
+config.prefetch = 0
 
 local function eq(a, b, msg)
   if not vim.deep_equal(a, b) then
@@ -27,8 +28,8 @@ local function harness(responder)
 
   local function make_provider(name)
     return {
-      request = function(req, cb)
-        local call = { tier = name, req = req, cb = cb, cancelled = false }
+      request = function(req, cb, on_partial)
+        local call = { tier = name, req = req, cb = cb, on_partial = on_partial, cancelled = false }
         h.calls[#h.calls + 1] = call
         if responder then responder(call) end
         return function() call.cancelled = true end
@@ -76,7 +77,7 @@ return {
     fn = function()
       local h = harness()
       h.core:on_event({ tick = 1, row = 1, col = 2, insert = false, context = word_ctx("lovely") })
-      h.advance(699)
+      h.advance(config.delays.word - 1)
       eq(#h.calls, 0)
       h.advance(2)
       eq(#h.calls, 1)
@@ -298,6 +299,91 @@ return {
       h.core:on_event({ tick = 2, row = 1, col = 5, insert = true, context = ctx })
       h.advance(300)
       eq(h.core.view.status, "ready")
+    end,
+  },
+  {
+    name = "prefetch starts the request early but shows nothing until the delay passes",
+    fn = function()
+      config.prefetch = 100
+      local h = harness(function() end)
+      h.core:on_event({ tick = 1, row = 1, col = 3, context = word_ctx("lovely") })
+      h.advance(99)
+      eq(#h.calls, 0)
+      h.advance(2)
+      eq(#h.calls, 1)
+      reply(h.calls[1], { "nice", "pleasant" })
+      h.advance(100)
+      eq(h.core.view.status, "idle")
+      h.advance(config.delays.word - 201 - 10)
+      eq(h.core.view.status, "idle")
+      h.advance(20)
+      eq(h.core.view.status, "ready")
+      eq(h.core.view.items[1].text, "nice")
+      config.prefetch = 0
+    end,
+  },
+  {
+    name = "prefetch: a response still pending at the delay shows loading, then the result",
+    fn = function()
+      config.prefetch = 100
+      local h = harness(function() end)
+      h.core:on_event({ tick = 1, row = 1, col = 3, context = word_ctx("lovely") })
+      h.advance(config.delays.word + 1)
+      eq(h.core.view.status, "loading")
+      reply(h.calls[1], { "nice", "pleasant" })
+      eq(h.core.view.status, "ready")
+      config.prefetch = 0
+    end,
+  },
+  {
+    name = "prefetch: moving the cursor before the delay cancels the request and shows nothing",
+    fn = function()
+      config.prefetch = 100
+      local h = harness(function() end)
+      h.core:on_event({ tick = 1, row = 1, col = 3, context = word_ctx("lovely") })
+      h.advance(150)
+      eq(#h.calls, 1)
+      h.core:on_event({ tick = 1, row = 1, col = 9, context = word_ctx("weather") })
+      eq(h.calls[1].cancelled, true)
+      reply(h.calls[1], { "stale" })
+      h.advance(config.delays.word - 10)
+      eq(h.core.view.status, "idle")
+      config.prefetch = 0
+    end,
+  },
+  {
+    name = "prefetch: a cached word shows at the delay with no request",
+    fn = function()
+      config.prefetch = 100
+      local h = harness(function(call) vim.schedule(function() end) end)
+      h.core:on_event({ tick = 1, row = 1, col = 3, context = word_ctx("lovely") })
+      h.advance(150)
+      reply(h.calls[1], { "nice", "pleasant" })
+      h.advance(config.delays.word)
+      h.core:on_event({ tick = 2, row = 1, col = 3, context = word_ctx("lovely") })
+      h.advance(150)
+      eq(#h.calls, 1)
+      h.advance(config.delays.word)
+      eq(h.core.view.status, "ready")
+      config.prefetch = 0
+    end,
+  },
+  {
+    name = "partial results show as soon as the first alternative arrives and keep the user's selection",
+    fn = function()
+      local h = harness(function() end)
+      h.core:on_event({ tick = 1, row = 1, col = 3, context = word_ctx("lovely") })
+      h.advance(config.delays.word + 1)
+      eq(h.core.view.status, "loading")
+      h.calls[1].on_partial({ items = { "nice" } })
+      eq(h.core.view.status, "ready")
+      eq(h.core.view.streaming, true)
+      h.calls[1].on_partial({ items = { "nice", "pleasant", "sweet" } })
+      h.core:move(1)
+      eq(h.core.view.index, 2)
+      reply(h.calls[1], { "nice", "pleasant", "sweet", "kind" })
+      eq(h.core.view.streaming, nil)
+      eq(h.core.view.index, 2)
     end,
   },
 }

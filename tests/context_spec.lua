@@ -97,6 +97,9 @@ return {
     fn = function()
       eq(lang.detect("Isto não é uma frase muito boa."), "pt")
       eq(lang.detect("This is not a very good sentence."), "en")
+      eq(lang.detect("Entretanto"), "pt")
+      eq(lang.detect("Entretanto Entretanto, também"), "pt")
+      eq(lang.detect("however"), "en")
     end,
   },
   {
@@ -141,6 +144,32 @@ return {
       eq(c.scol, 4)
       eq(context.selection(lines, 1, 4, 10, 2), nil)
       eq(context.selection(lines, 1, 4, 10, 1).target, "walked")
+    end,
+  },
+  {
+    name = "plain-text prompts ask for one item per line with a token cap; make-sense stays JSON",
+    fn = function()
+      local prompts = require("writing.prompts")
+      local ctx = context.analyze({ "The weather is lovely today." }, 1, 16, false)
+      local req = prompts.build(ctx, { lines = true })
+      eq(req.lines, true)
+      eq(req.max_tokens, 48)
+      eq(req.system:find("one alternative per line", 1, true) ~= nil, true)
+      eq(req.system:find("JSON", 1, true), nil)
+      local json = prompts.build(ctx, {})
+      eq(json.lines, false)
+      eq(json.max_tokens, nil)
+      local sense = prompts.build({ kind = "make_sense", target = "a b c", first = 1, last = 1, row = 1 }, { lines = true })
+      eq(sense.lines, false)
+      eq(sense.system:find("JSON", 1, true) ~= nil, true)
+    end,
+  },
+  {
+    name = "split_lines strips numbering, bullets and quotes and drops blanks",
+    fn = function()
+      local prompts = require("writing.prompts")
+      eq(prompts.split_lines('1. nice\n- "pleasant"\n\n* sweet \r\n“kind”'), { "nice", "pleasant", "sweet", "kind" })
+      eq(prompts.split_lines(""), {})
     end,
   },
 }

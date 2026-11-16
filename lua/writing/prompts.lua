@@ -3,7 +3,12 @@ local lang = require("writing.lang")
 local M = {}
 
 local BASE = "You are a writing assistant inside a text editor. You only offer alternatives; the writer decides. "
-  .. "Never invent facts the writer did not write. Reply only with JSON matching the schema."
+  .. "Never invent facts the writer did not write."
+
+local JSON_RULE = "Reply only with JSON matching the schema."
+local LINES_RULE = "Reply with one alternative per line and nothing else: no numbering, no bullets, no quotes, no explanations."
+
+local MAX_TOKENS = { synonyms = 48, spelling = 48, selection = 140, variations = 240 }
 
 local LANG_RULE = {
   en = "Write the alternatives in English.",
@@ -53,7 +58,7 @@ local INSTRUCTIONS = {
     return ("Give %d replacements for the fragment. Each replacement is a phrase of similar length that takes the "
       .. "fragment's place inside the sentence, so the sentence stays grammatical and keeps its meaning. Return ONLY "
       .. "the replacement phrases, never the whole sentence. Example: sentence 'She walked quickly to the old "
-      .. "station.', fragment 'walked quickly' gives items ['hurried', 'strolled briskly', 'made her way']."):format(n)
+      .. "station.', fragment 'walked quickly' gives the alternatives 'hurried', 'strolled briskly', 'made her way'."):format(n)
   end,
   make_sense = function(n)
     return ("The paragraph holds loose thoughts. Produce exactly %d plans. Plan 1 keeps one thread and rewrites the "
@@ -65,7 +70,31 @@ local INSTRUCTIONS = {
 }
 
 local function sample_text(ctx)
-  return ctx.target .. " " .. (ctx.sentence or "")
+  return ctx.target .. " " .. (ctx.sentence or "") .. " " .. (ctx.previous or "")
+end
+
+local OPEN_QUOTES = { '"', "“", "«" }
+local CLOSE_QUOTES = { '"', "”", "»" }
+
+function M.tier(kind)
+  return kind == "make_sense" and "strong" or "fast"
+end
+
+function M.split_lines(text)
+  local items = {}
+  for line in (text .. "\n"):gmatch("(.-)\r?\n") do
+    line = line:gsub("^%s*[%-%*•]%s+", ""):gsub("^%s*%d+[%.%)]%s+", "")
+    line = vim.trim(line)
+    for _, quote in ipairs(OPEN_QUOTES) do
+      if line:sub(1, #quote) == quote then line = line:sub(#quote + 1) end
+    end
+    for _, quote in ipairs(CLOSE_QUOTES) do
+      if #line >= #quote and line:sub(-#quote) == quote then line = line:sub(1, -#quote - 1) end
+    end
+    line = vim.trim(line)
+    if line ~= "" then items[#items + 1] = line end
+  end
+  return items
 end
 
 function M.build(ctx, opts)
@@ -74,8 +103,9 @@ function M.build(ctx, opts)
   local kind = ctx.kind
   local language = lang.detect(sample_text(ctx))
 
-  local ask = kind == "make_sense" and counts[kind] or counts[kind] + 1
-  local system = { BASE, LANG_RULE[language], INSTRUCTIONS[kind](ask) }
+  local ask = (kind == "make_sense" or kind == "variations") and counts[kind] or counts[kind] + 1
+  local lines = (opts.lines and kind ~= "make_sense") or false
+  local system = { BASE, LANG_RULE[language], INSTRUCTIONS[kind](ask), lines and LINES_RULE or JSON_RULE }
   if ctx.misspelled then
     system[#system + 1] = "The target word is misspelled. Work out which single word the writer meant and give "
       .. "alternatives for that word, spelled correctly. Ignore any other typos elsewhere in the sentence; they are "
@@ -115,7 +145,9 @@ function M.build(ctx, opts)
 
   return {
     kind = kind,
-    tier = kind == "make_sense" and "strong" or "fast",
+    lines = lines,
+    max_tokens = lines and MAX_TOKENS[kind] or nil,
+    tier = M.tier(kind),
     language = language,
     system = table.concat(system, "\n\n"),
     user = user,

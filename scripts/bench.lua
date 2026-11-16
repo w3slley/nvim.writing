@@ -47,6 +47,7 @@ local function body_for(ctx, model)
     },
   }
   if model:find("gpt-oss", 1, true) then body.reasoning_effort = "low" end
+  if model:find("qwen3", 1, true) then body.reasoning_effort = "none" end
   return vim.json.encode(body), req
 end
 
