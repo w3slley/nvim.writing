@@ -76,10 +76,7 @@ function Core:on_event(snap)
   if self.hidden or self.manual_only then return end
   local ctx = snap.context
   if not ctx or ctx.kind == "make_sense" then return end
-  if ctx.kind == "spelling" and not self.config.spell.ambient then
-    if snap.insert then return end
-    ctx = vim.tbl_extend("force", ctx, { kind = "synonyms", misspelled = true })
-  end
+  if ctx.kind == "spelling" and snap.insert and not self.config.spell.while_typing then return end
   if self.ignored[ignore_key(ctx, snap.tick)] then return end
 
   local delay = ({
@@ -126,7 +123,7 @@ function Core:fire(ctx, opts)
   local id = self.req_id
   self.current = { ctx = ctx, opts = opts, shown = opts.shown or {} }
 
-  if ctx.kind == "spelling" then
+  if ctx.kind == "spelling" and not opts.llm then
     local items = {}
     for _, w in ipairs(self.spell(ctx)) do items[#items + 1] = { text = w } end
     items = quality.filter(ctx, items)
@@ -138,6 +135,7 @@ function Core:fire(ctx, opts)
       end
       return
     end
+    for _, item in ipairs(items) do table.insert(self.current.shown, item.text) end
     self:set_view({
       status = "ready", kind = ctx.kind, ctx = ctx, target = ctx.target,
       items = items, flags = {}, index = 1, tick = opts.tick,
@@ -267,6 +265,7 @@ function Core:regenerate(tweak)
   self.log({ event = "regenerate", kind = cur.ctx.kind, tweak = tweak })
   self:fire(cur.ctx, vim.tbl_extend("force", cur.opts, {
     tweak = tweak or cur.opts.tweak, fresh = true, manual = true, shown = cur.shown,
+    llm = cur.ctx.kind == "spelling" or nil,
   }))
   return true
 end

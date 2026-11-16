@@ -47,6 +47,7 @@ local function harness(responder)
       end,
     },
     clock = function() return h.now end,
+    spell = function() return { "the", "tea" } end,
     on_change = function(v) h.views[#h.views + 1] = vim.deepcopy(v.status) end,
     apply = function(edit)
       h.applied[#h.applied + 1] = edit
@@ -268,25 +269,36 @@ return {
     end,
   },
   {
-    name = "a misspelled word at rest is requested as synonyms flagged misspelled",
+    name = "a misspelled word at rest shows local spell suggestions with no LLM call; Ctrl+r asks the LLM for more",
     fn = function()
       local h = harness()
       local ctx = { kind = "spelling", row = 1, scol = 0, ecol = 3, target = "teh", sentence = "teh cat" }
       h.core:on_event({ tick = 1, row = 1, col = 1, insert = false, context = ctx })
-      h.advance(800)
+      h.advance(300)
+      eq(#h.calls, 0)
+      eq(h.core.view.status, "ready")
+      eq(h.core.view.items[1].text, "the")
+      h.core:regenerate()
       eq(#h.calls, 1)
-      eq(h.calls[1].req.kind, "synonyms")
-      eq(h.calls[1].req.system:find("misspelled", 1, true) ~= nil, true)
+      eq(h.calls[1].req.kind, "spelling")
+      eq(h.calls[1].req.system:find("- the", 1, true) ~= nil, true)
+      reply(h.calls[1], { "tea", "ten", "tech" })
+      eq({ h.core.view.items[1].text, h.core.view.items[2].text }, { "ten", "tech" })
+      eq(h.core.view.kind, "spelling")
     end,
   },
   {
-    name = "a misspelled word right after typing it stays quiet unless ambient spelling is on",
+    name = "a misspelled word right after typing it stays quiet unless while_typing is on",
     fn = function()
       local h = harness()
       local ctx = { kind = "spelling", row = 1, scol = 0, ecol = 3, target = "teh", sentence = "teh " }
       h.core:on_event({ tick = 1, row = 1, col = 4, insert = true, context = ctx })
       h.advance(2000)
-      eq(#h.calls, 0)
+      eq(h.core.view.status, "idle")
+      h.core.config = vim.tbl_deep_extend("force", {}, h.core.config, { spell = { while_typing = true } })
+      h.core:on_event({ tick = 2, row = 1, col = 5, insert = true, context = ctx })
+      h.advance(300)
+      eq(h.core.view.status, "ready")
     end,
   },
 }

@@ -75,7 +75,7 @@ local function footer(view, keys)
   if view.kind == "variations" or view.kind == "selection" then
     parts[#parts + 1] = label(keys.tighter) .. label(keys.clearer):gsub("^⌥", "") .. label(keys.formal):gsub("^⌥", "") .. " tweak"
   end
-  if view.kind ~= "spelling" then parts[#parts + 1] = label(keys.regenerate) .. " more" end
+  parts[#parts + 1] = label(keys.regenerate) .. " more"
   parts[#parts + 1] = label(keys.ignore) .. " ignore"
   return table.concat(parts, " · ")
 end

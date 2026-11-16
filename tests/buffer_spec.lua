@@ -6,6 +6,7 @@ end
 
 local function respond(req)
   if req.kind == "synonyms" then return { items = { "nice", "pleasant", "fine", "sunny" } } end
+  if req.kind == "spelling" then return { items = { "tea", "ten", "tech" } } end
   if req.kind == "selection" then return { items = { "walked fast", "strolled swiftly" } } end
   if req.kind == "variations" then
     return { items = { "On the mat sat the cat.", "The cat was sitting on the mat." } }
@@ -136,35 +137,6 @@ return {
     end,
   },
   {
-    name = "misspelled words are underlined, give synonyms at rest, and spelling fixes on demand",
-    fn = function()
-      local writing, buf = fresh({ "I like teh weather." })
-      eq(vim.wo.spell, true)
-      vim.api.nvim_win_set_cursor(0, { 1, 8 })
-      event(buf)
-      local core = wait_ready(writing)
-      eq(core.view.kind, "synonyms")
-      writing.suggest_now()
-      core = wait_ready(writing)
-      eq(core.view.kind, "spelling")
-      eq(core.view.items[1].text, "the")
-      core:accept()
-      eq(vim.api.nvim_buf_get_lines(buf, 0, -1, false), { "I like the weather." })
-    end,
-  },
-  {
-    name = "ambient spelling fires on a misspelled word when enabled",
-    fn = function()
-      local writing, buf = fresh({ "I like teh weather." }, { ambient = true })
-      vim.api.nvim_win_set_cursor(0, { 1, 8 })
-      event(buf)
-      local core = wait_ready(writing)
-      eq(core.view.kind, "spelling")
-      core:accept()
-      eq(vim.api.nvim_buf_get_lines(buf, 0, -1, false), { "I like the weather." })
-    end,
-  },
-  {
     name = "accepting a selection suggestion replaces only the selected fragment",
     fn = function()
       local writing, buf = fresh({ "She walked quickly to the station." })
@@ -290,7 +262,28 @@ return {
     end,
   },
   {
-    name = "resting on a misspelled word still gives synonyms; the action key gives spelling, then the sentence",
+    name = "resting on a misspelled word shows Neovim spell suggestions with no LLM call, and the word is underlined",
+    fn = function()
+      local writing, buf = fresh({ "I like teh weather." })
+      local calls = {}
+      local original = writing._core().providers.fast.request
+      writing._core().providers.fast.request = function(req, cb)
+        calls[#calls + 1] = req
+        return original(req, cb)
+      end
+      eq(vim.wo.spell, true)
+      vim.api.nvim_win_set_cursor(0, { 1, 8 })
+      event(buf)
+      local core = wait_ready(writing)
+      eq(core.view.kind, "spelling")
+      eq(core.view.items[1].text, "the")
+      eq(#calls, 0)
+      core:accept()
+      eq(vim.api.nvim_buf_get_lines(buf, 0, -1, false), { "I like the weather." })
+    end,
+  },
+  {
+    name = "Ctrl+r on spelling suggestions asks the LLM for more and skips the ones already shown",
     fn = function()
       local writing, buf = fresh({ "I like teh weather." })
       local calls = {}
@@ -302,13 +295,32 @@ return {
       vim.api.nvim_win_set_cursor(0, { 1, 8 })
       event(buf)
       local core = wait_ready(writing)
-      eq(core.view.kind, "synonyms")
-      eq(core.view.ctx.misspelled, true)
+      local first = vim.tbl_map(function(i) return i.text end, core.view.items)
+      core:regenerate()
+      vim.wait(1000, function() return #calls == 1 and core.view.status == "ready" end, 10)
+      eq(#calls, 1)
+      eq(calls[1].kind, "spelling")
       eq(calls[1].system:find("misspelled", 1, true) ~= nil, true)
+      for _, shown in ipairs(first) do
+        eq(calls[1].system:find("- " .. shown, 1, true) ~= nil, true, "avoid list has " .. shown)
+      end
+      for _, item in ipairs(core.view.items) do
+        eq(vim.tbl_contains(first, item.text), false, item.text .. " repeats a local suggestion")
+      end
+    end,
+  },
+  {
+    name = "on a misspelled word the action key goes spelling -> synonyms -> sentence, and the synonyms key jumps ahead",
+    fn = function()
+      local writing, buf = fresh({ "I like teh weather." })
+      vim.api.nvim_win_set_cursor(0, { 1, 8 })
+      writing.suggest_now()
+      local core = wait_ready(writing)
+      eq(core.view.kind, "spelling")
       writing.suggest_now()
       core = wait_ready(writing)
-      eq(core.view.kind, "spelling")
-      eq(core.view.items[1].text, "the")
+      eq(core.view.kind, "synonyms")
+      eq(core.view.ctx.misspelled, true)
       writing.suggest_now()
       vim.wait(1000, function() return core.view.kind == "variations" and core.view.status ~= "loading" end, 10)
       eq(core.view.kind, "variations")

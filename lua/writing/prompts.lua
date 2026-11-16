@@ -50,6 +50,11 @@ local INSTRUCTIONS = {
       .. "If a previous sentence is given and the target feels disconnected from it, at least one rewrite may link "
       .. "the two. Each rewrite is one complete sentence with its end punctuation, ready to replace the original."):format(n)
   end,
+  spelling = function(n)
+    return ("The target word is misspelled. Using the sentence for context, give %d likely intended words, spelled "
+      .. "correctly, most likely first. Single words only, no explanations. Ignore any other typos elsewhere in the "
+      .. "sentence; they are not the target."):format(n)
+  end,
   selection = function(n)
     return ("Give %d replacements for the fragment. Each replacement is a phrase of similar length that takes the "
       .. "fragment's place inside the sentence, so the sentence stays grammatical and keeps its meaning. Return ONLY "
@@ -71,15 +76,16 @@ end
 
 function M.build(ctx, opts)
   opts = opts or {}
-  local counts = opts.counts or { synonyms = 4, variations = 3, make_sense = 2, selection = 3 }
+  local counts = opts.counts or { synonyms = 4, variations = 3, make_sense = 2, selection = 3, spelling = 4 }
   local kind = ctx.kind
   local language = lang.detect(sample_text(ctx))
 
   local ask = kind == "make_sense" and counts[kind] or counts[kind] + 1
   local system = { BASE, LANG_RULE[language], INSTRUCTIONS[kind](ask) }
   if ctx.misspelled then
-    system[#system + 1] = "The target word is misspelled. Infer the word the writer meant from the sentence and "
-      .. "give alternatives for that intended word, spelled correctly."
+    system[#system + 1] = "The target word is misspelled. Work out which single word the writer meant and give "
+      .. "alternatives for that word, spelled correctly. Ignore any other typos elsewhere in the sentence; they are "
+      .. "not the target."
   end
   if opts.tweak and TWEAK[opts.tweak] then system[#system + 1] = TWEAK[opts.tweak] end
   if opts.avoid and #opts.avoid > 0 then
@@ -90,8 +96,17 @@ function M.build(ctx, opts)
   end
 
   local user
-  if kind == "synonyms" then
-    user = ("Target word: %s\nSentence: %s"):format(ctx.target, ctx.sentence)
+  if kind == "synonyms" or kind == "spelling" then
+    local sentence = ctx.sentence
+    if ctx.misspelled or kind == "spelling" then
+      local at = sentence:find(ctx.target, 1, true)
+      if at then
+        local from = math.max(1, at - 30)
+        local to = math.min(#sentence, at + #ctx.target + 30)
+        sentence = sentence:sub(from, to):gsub("^%S*%s", from > 1 and "" or "%0"):gsub("%s%S*$", to < #sentence and "" or "%0")
+      end
+    end
+    user = ("Target word: %s\nSentence: %s"):format(ctx.target, sentence)
   elseif kind == "selection" then
     user = ("Sentence: %s\nFragment to replace: %s"):format(ctx.sentence, ctx.target)
     if ctx.previous then user = user .. "\nPrevious sentence: " .. ctx.previous end

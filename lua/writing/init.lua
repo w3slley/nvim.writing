@@ -221,7 +221,11 @@ function M.suggest_now()
   if not ctx then
     ctx = sentence_context_at(buf)
   elseif ctx.kind == "spelling" then
-    if shown == "spelling" then ctx = sentence_context_at(buf) end
+    if shown == "spelling" then
+      ctx = as_synonyms(ctx)
+    elseif shown == "synonyms" then
+      ctx = sentence_context_at(buf)
+    end
   elseif ctx.kind == "synonyms" and shown == "synonyms" then
     ctx = sentence_context_at(buf)
   end
