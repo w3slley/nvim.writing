@@ -55,6 +55,13 @@ end
 
 function M.apply(buf, langs)
   vim.bo[buf].spelllang = table.concat(langs, ",")
+  if vim.bo[buf].spellfile == "" then
+    local files = {}
+    for _, lang in ipairs(langs) do
+      files[#files + 1] = vim.fn.fnameescape(site_dir() .. "/spell/" .. lang:match("^[^_]+") .. ".utf-8.add")
+    end
+    vim.bo[buf].spellfile = table.concat(files, ",")
+  end
 end
 
 function M.install(langs, on_done)

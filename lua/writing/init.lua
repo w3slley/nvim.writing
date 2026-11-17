@@ -414,7 +414,7 @@ function M.attach(buf)
   if not active or vim.b[buf].writing_attached then return end
   if project_disabled(buf) then return end
   vim.b[buf].writing_attached = true
-  vim.b[buf].writing_saved = { spelllang = vim.bo[buf].spelllang, spellcapcheck = vim.bo[buf].spellcapcheck }
+  vim.b[buf].writing_saved = { spelllang = vim.bo[buf].spelllang, spellfile = vim.bo[buf].spellfile, spellcapcheck = vim.bo[buf].spellcapcheck }
   buf_maps[buf] = {}
   update_badge()
   if spell_ready then spell.apply(buf, cfg.spell.langs) end
@@ -476,6 +476,7 @@ function M.detach(buf)
   local saved = vim.b[buf].writing_saved
   if saved then
     vim.bo[buf].spelllang = saved.spelllang
+    vim.bo[buf].spellfile = saved.spellfile
     vim.bo[buf].spellcapcheck = saved.spellcapcheck
   end
   vim.b[buf].writing_saved = nil
